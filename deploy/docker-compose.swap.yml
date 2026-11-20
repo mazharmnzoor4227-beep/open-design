@@ -17,6 +17,12 @@ services:
       OD_ALLOWED_ORIGINS: ${OPEN_DESIGN_ALLOWED_ORIGINS:-}
       OD_API_TOKEN: ${OPEN_DESIGN_API_TOKEN}
       OD_ALLOWED_INTERNAL_HOSTS: host.docker.internal
+      # Fork: the local LFM3 model on this 2-core host needs ~10-13 min of
+      # silent prefill for OD's 11-15k-token prompts (~19 tok/s). The
+      # daemon's 10-min inactivity watchdog killed such runs as "stalled"
+      # (run 9f3845f3, 2026-11-20). 30 min covers the worst prefill; the
+      # timer resets on any output, so a genuinely hung run still fails.
+      OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS: "1800000"
       PATH: /mnt/host-local-bin:/usr/local/bin:/usr/bin:/bin
     extra_hosts:
       - "host.docker.internal:host-gateway"
