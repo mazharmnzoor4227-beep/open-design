@@ -212,6 +212,9 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     protocol: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
     preferredModels: [
+      // Free default (live-checked 2026-11-20; the free catalogue rotates —
+      // paste any other `:free` id in the model field if this one leaves it).
+      'nvidia/nemotron-3.5-lightning:free',
       'anthropic/claude-sonnet-4.6',
       'anthropic/claude-sonnet-4.5',
       'google/gemini-2.5-flash',
@@ -379,15 +382,20 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // directly over the loopback OpenAI-compatible endpoint. The model is
     // whatever the server currently serves; the keyless fetch step replaces
     // the lfm3-1.7b default with the server's actual model id when it
-    // differs. In a containerized daemon the host's server is reached at
-    // http://host.docker.internal:8081/v1 instead (same server, Docker's
-    // host-gateway alias) — edit the base URL if the fetch fails.
+    // differs.
+    // FORK: the daemon runs containerized, so the host's server is reached
+    // at http://host.docker.internal:8081/v1 (Docker's host-gateway alias,
+    // allowlisted via OD_ALLOWED_INTERNAL_HOSTS) — NOT 127.0.0.1, which
+    // inside the container is the container itself. This preset is the
+    // fork's no-key default: a fresh "Continue without a key" session runs
+    // on it immediately. Host-run daemons (local dev) can point it back at
+    // http://127.0.0.1:8081/v1 in Settings.
     // Honest limit, also shown under the model field: small local models
     // cannot match a Pro model's clone quality — use a 7B+ model for
     // decent clones.
     label: 'Local llama-server',
     protocol: 'openai',
-    baseUrl: 'http://127.0.0.1:8081/v1',
+    baseUrl: 'http://host.docker.internal:8081/v1',
     preferredModels: ['lfm3-1.7b'],
     requiresApiKey: false,
   },
@@ -698,16 +706,68 @@ function migrateRetiredKnownProviderModel(
   return true;
 }
 
+/** Fork no-key default: the local llama-server (LFM3-1.7B). */
+export const LOCAL_LLAMA_BASE_URL = 'http://host.docker.internal:8081/v1';
+export const LOCAL_LLAMA_MODEL = 'lfm3-1.7b';
+
+/**
+ * Fork: seed the Local llama-server preset as the provider when a config
+ * never had a key and never picked a provider, so home + a new project
+ * work immediately after "Continue without a key" — zero extra taps, no
+ * Antigravity error, no provider tap needed. Returns true when it seeded.
+ *
+ * Never touches a config with any key in any protocol slot, or one with
+ * an explicitly-picked provider / custom base URL (e.g. a self-hosted
+ * Ollama) — those are the user's own setup. The agent half of the default
+ * (byok-opencode over Antigravity-without-sign-in) lives in App.tsx's
+ * daemon-config hydration, which can see the Antigravity sign-in state;
+ * this only seeds the provider fields, which loadConfig can decide on its
+ * own. The seed also writes the `openai` shadow slot, so the Local
+ * provider survives a later protocol switch away and back.
+ */
+export function seedLocalDefaultProvider(config: AppConfig): boolean {
+  const hasAnyKey =
+    config.apiKey.trim() !== '' ||
+    Object.values(config.apiProtocolConfigs ?? {}).some(
+      (slot) => typeof slot?.apiKey === 'string' && slot.apiKey.trim() !== '',
+    );
+  if (hasAnyKey) return false;
+  const explicitProvider =
+    (config.apiProviderBaseUrl != null &&
+      config.apiProviderBaseUrl !== DEFAULT_CONFIG.apiProviderBaseUrl) ||
+    (config.baseUrl.trim() !== '' &&
+      config.baseUrl.trim() !== DEFAULT_CONFIG.baseUrl &&
+      config.baseUrl.trim() !== LOCAL_LLAMA_BASE_URL);
+  if (explicitProvider) return false;
+  config.apiProtocol = 'openai';
+  config.baseUrl = LOCAL_LLAMA_BASE_URL;
+  config.model = LOCAL_LLAMA_MODEL;
+  config.apiProviderBaseUrl = LOCAL_LLAMA_BASE_URL;
+  config.apiProtocolConfigs = {
+    ...(config.apiProtocolConfigs ?? {}),
+    openai: {
+      ...(config.apiProtocolConfigs?.openai ?? {}),
+      apiKey: '',
+      baseUrl: LOCAL_LLAMA_BASE_URL,
+      model: LOCAL_LLAMA_MODEL,
+      apiProviderBaseUrl: LOCAL_LLAMA_BASE_URL,
+    },
+  };
+  return true;
+}
+
 export function loadConfig(): AppConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return {
+      const fresh: AppConfig = {
         ...DEFAULT_CONFIG,
         pet: normalizePet(DEFAULT_PET),
         notifications: normalizeNotifications(DEFAULT_NOTIFICATIONS),
         orbit: normalizeOrbit(DEFAULT_ORBIT),
       };
+      seedLocalDefaultProvider(fresh);
+      return fresh;
     }
     const parsed = JSON.parse(raw) as Partial<AppConfig>;
     // Strip daemon-owned privacy fields if a stale localStorage payload
@@ -814,6 +874,9 @@ export function loadConfig(): AppConfig {
     const downgradedUnsupportedChatProtocol =
       downgradeUnsupportedChatProtocol(merged);
 
+    // Fork: a never-configured setup defaults to the local model.
+    migratedConfig = seedLocalDefaultProvider(merged) || migratedConfig;
+
     // Fixed-origin gateways (e.g. AIHubMix) hide the Base URL field, so a config
     // persisted before the origin was auto-resolved can carry an empty baseUrl.
     // Backfill it here so every consumer (Settings form, top-bar switcher, chat)
@@ -837,12 +900,14 @@ export function loadConfig(): AppConfig {
 
     return merged;
   } catch {
-    return {
+    const fallback: AppConfig = {
       ...DEFAULT_CONFIG,
       pet: normalizePet(DEFAULT_PET),
       notifications: normalizeNotifications(DEFAULT_NOTIFICATIONS),
       orbit: normalizeOrbit(DEFAULT_ORBIT),
     };
+    seedLocalDefaultProvider(fallback);
+    return fallback;
   }
 }
 

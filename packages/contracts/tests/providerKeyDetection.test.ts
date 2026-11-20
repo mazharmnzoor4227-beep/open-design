@@ -33,11 +33,14 @@ describe('detectProviderFromApiKey', () => {
   });
 
   it('detects an OpenRouter key and routes it through the OpenAI protocol', () => {
+    // Free default is a literally-free `:free` model: the free catalogue
+    // rotates and deepseek has no free variant right now (live-checked
+    // 2026-11-20), so the old deepseek pick would fail or charge.
     expect(detectProviderFromApiKey('sk-or-v1-abc123')).toEqual({
       protocol: 'openai',
       baseUrl: 'https://openrouter.ai/api/v1',
       providerLabel: 'OpenRouter',
-      freeModel: 'deepseek/deepseek-chat',
+      freeModel: 'nvidia/nemotron-3.5-lightning:free',
       matchKind: 'sk-or-',
     });
   });

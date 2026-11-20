@@ -131,6 +131,7 @@ import {
   listProjectRunsWithScope,
   type VelaLoginStatus,
 } from './providers/daemon';
+import { fetchAntigravityAccounts } from './providers/antigravity-accounts';
 import {
   AMR_LOGIN_STATUS_EVENT,
   amrLoginStatusEventReason,
@@ -2609,10 +2610,15 @@ function AppInner() {
         fetchDaemonConfig(),
         fetchComposioConfigFromDaemon(),
         fetchMediaProvidersFromDaemon(),
+        // Fork: Antigravity sign-in state decides the default agent (below).
+        // Never let this fetch fail the whole hydration — a null result just
+        // leaves the stored agent untouched.
+        fetchAntigravityAccounts().catch(() => null),
       ]).then(async ([
         daemonConfig,
         daemonComposioConfig,
         daemonMediaProvidersResult,
+        antigravityAccounts,
       ]) => {
         if (cancelled) return;
         const daemonMediaProvidersLoaded =
@@ -2641,6 +2647,22 @@ function AppInner() {
           ),
           daemonMediaProvidersLoaded,
         );
+        // Fork: Antigravity-without-sign-in is a dead default — every run
+        // fails with "not signed in". When no Antigravity account is signed
+        // in (email set by the step-2 connect flow), default the agent to
+        // the local BYOK path (byok-opencode + the seeded Local provider in
+        // loadConfig) so a no-key session runs immediately, zero taps. A
+        // signed-in account is untouched, and a key the user pasted keeps
+        // working through byok-opencode. The user can still pick Antigravity
+        // in the picker any time; picking it while unsigned-in just fails
+        // the run, and the error card offers the local retry instead.
+        // (byok-opencode is available in this deployment: opencode is
+        // installed on the host and mounted into the container.)
+        const antigravitySignedIn = (antigravityAccounts?.accounts ?? [])
+          .some((account) => account.email != null && account.email !== '');
+        if (!antigravitySignedIn && (next.agentId == null || next.agentId === 'antigravity')) {
+          next.agentId = 'byok-opencode';
+        }
         const hasLocalComposioKey = Boolean(next.composio?.apiKey?.trim());
         if (!hasLocalComposioKey && daemonComposioConfig) {
           next.composio = daemonComposioConfig;

@@ -294,6 +294,57 @@ function extractModels(protocol: ConnectionTestProtocol, data: unknown): Provide
   return [];
 }
 
+/**
+ * Fork: candidate base URLs for the host's llama-server, in probe order.
+ * `host.docker.internal` first — the daemon runs containerized, so the
+ * host's server is reached through Docker's host-gateway alias; the
+ * loopback form is the host-run daemon fallback.
+ */
+export const LOCAL_LLAMA_CANDIDATE_BASE_URLS = [
+  'http://host.docker.internal:8081/v1',
+  'http://127.0.0.1:8081/v1',
+] as const;
+
+export interface LocalLlamaProvider {
+  baseUrl: string;
+  model: string;
+}
+
+/**
+ * Fork: resolve the local llama-server as the no-key default provider.
+ * Probes each candidate with the keyless /v1/models fetch (3s per
+ * candidate); the first that answers with at least one model wins, using
+ * the first model id the server reports (lfm3-1.7b on the user's server).
+ * Returns null when no local server answers — callers keep their existing
+ * "provider required" error instead of inventing a provider. `candidates`
+ * exists so tests can point at a stub server; production callers use the
+ * default list.
+ */
+export async function resolveLocalLlamaProvider(
+  candidates: readonly string[] = LOCAL_LLAMA_CANDIDATE_BASE_URLS,
+): Promise<LocalLlamaProvider | null> {
+  for (const baseUrl of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await listProviderModels({
+        protocol: 'openai',
+        baseUrl,
+        apiKey: '',
+        signal: controller.signal,
+      });
+      if (res.ok && res.models && res.models.length > 0) {
+        return { baseUrl, model: res.models[0].id };
+      }
+    } catch {
+      // Unreachable candidate — try the next one.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
 export async function listProviderModels(
   input: ProviderModelsInput,
 ): Promise<ProviderModelsResponse> {

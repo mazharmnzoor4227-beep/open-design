@@ -1118,11 +1118,17 @@ export function InlineModelSwitcher({
       : apiProtocolLabel(apiProtocol);
   const chipModel =
     config.mode === 'daemon'
-      ? isDeepSeekV4FlashCampaignModel(currentModelId)
-        ? currentModelLabel ?? 'DeepSeek V4 Flash'
-        : currentModelLabel && currentModelId !== 'default'
-          ? currentModelLabel
-          : t('inlineSwitcher.modelDefault')
+      ? currentAgent?.id === 'byok-opencode'
+        // Fork: byok-opencode's only agent model is the `default`
+        // sentinel, but the run really uses config.model (the Local LFM3
+        // preset when no key is set). Show the real model so the chip
+        // never reads "Default (CLI config)" on the local path.
+        ? config.model.trim() || t('inlineSwitcher.modelDefault')
+        : isDeepSeekV4FlashCampaignModel(currentModelId)
+          ? currentModelLabel ?? 'DeepSeek V4 Flash'
+          : currentModelLabel && currentModelId !== 'default'
+            ? currentModelLabel
+            : t('inlineSwitcher.modelDefault')
       : config.model.trim() || t('inlineSwitcher.modelDefault');
   // Visible chip text drops the company token the way the model rows do
   // (`claude-fable-5` → `fable-5`); the aria-label/tooltip above keep the full
@@ -1135,9 +1141,11 @@ export function InlineModelSwitcher({
   // than a named model, so it keeps the agent logo instead of guessing a vendor.
   const chipModelIconSrc =
     config.mode === 'daemon'
-      ? currentModelId && currentModelId !== 'default'
-        ? modelProviderIconSrc(currentModelId)
-        : null
+      ? currentAgent?.id === 'byok-opencode'
+        ? modelProviderIconSrc(config.model.trim() || null)
+        : currentModelId && currentModelId !== 'default'
+          ? modelProviderIconSrc(currentModelId)
+          : null
       : modelProviderIconSrc(config.model.trim() || null);
 
   // Compact home chip surfaces the selected model name + a connection-status

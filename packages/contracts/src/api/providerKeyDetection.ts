@@ -25,9 +25,13 @@ export interface DetectedProvider {
   providerLabel: string;
   /**
    * Cheapest reliable chat model for this provider — auto-selected after
-   * detection. For OpenRouter this is the lowest-cost routed model, not a
-   * literally-free one: OpenRouter's free catalogue rotates, and
-   * `deepseek/deepseek-chat` is the stable low-cost pick.
+   * detection. For OpenRouter this is a literally-free (`:free`) model:
+   * OpenRouter's free catalogue rotates, and live-checked 2026-11-20
+   * there is no DeepSeek or Qwen free variant right now — the previous
+   * `deepseek/deepseek-chat` pick is paid, so it would fail or charge.
+   * `nvidia/nemotron-3.5-lightning:free` (1M context, strong coder) is
+   * the current free default. The model field stays editable after
+   * auto-detect, so any other `:free` id can be pasted in instead.
    */
   freeModel: string;
   /** Which key shape matched, for diagnostics. */
@@ -81,7 +85,7 @@ export function detectProviderFromApiKey(
       protocol: 'openai',
       baseUrl: 'https://openrouter.ai/api/v1',
       providerLabel: 'OpenRouter',
-      freeModel: 'deepseek/deepseek-chat',
+      freeModel: 'nvidia/nemotron-3.5-lightning:free',
       matchKind: 'sk-or-',
     };
   }

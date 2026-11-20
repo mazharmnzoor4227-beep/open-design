@@ -12024,6 +12024,23 @@ export function ProjectView({
     [activeConversationId, handleSend, messages],
   );
 
+  // Fork: local retry after an agent switch. `handleSwitchToLocalAndRetry`
+  // below flips the agent to byok-opencode, but `handleSend` reads the
+  // `config` prop — a synchronous retry in the same tick would still see
+  // the old agent (Antigravity) and fail again. So the retry waits here
+  // until the re-render lands with the new agent, then fires once with a
+  // fresh closure. `handleRetry` itself no-ops if the failed message is
+  // no longer the retry target in this conversation.
+  const rerunAfterAgentSwitchRef = useRef<ChatMessage | null>(null);
+  useEffect(() => {
+    const pending = rerunAfterAgentSwitchRef.current;
+    if (!pending) return;
+    if (config.agentId !== 'byok-opencode') return;
+    if (!messages.some((message) => message.id === pending.id)) return;
+    rerunAfterAgentSwitchRef.current = null;
+    handleRetry(pending, 'switch_model_retry');
+  }, [config.agentId, handleRetry, messages]);
+
   // Release only the request we witnessed. Old responses must not unlock a
   // later attempt; accepting or rejecting it must not revive its old error card.
   useEffect(() => {
@@ -12123,6 +12140,17 @@ export function ProjectView({
     if (!activeConversationId) return;
     void handleSwitchConversationToCloud(activeConversationId, failedAssistant);
   }, [activeConversationId, handleSwitchConversationToCloud]);
+  // Fork: error-card "Use local model instead" — switch the agent to
+  // byok-opencode and re-run the failed turn once the new agent lands
+  // (see the rerunAfterAgentSwitchRef effect above). The daemon falls back
+  // to the local llama-server (LFM3) when the run carries no usable
+  // provider, so no provider fields are touched here and a pasted key is
+  // never overwritten.
+  const handleSwitchToLocalAndRetry = useCallback((failedAssistant: ChatMessage) => {
+    if (!activeConversationId) return;
+    rerunAfterAgentSwitchRef.current = failedAssistant;
+    onAgentChange('byok-opencode');
+  }, [activeConversationId, onAgentChange]);
   // PR #3157: Antigravity's `agy -p` cannot complete OAuth on its own,
   // so the auth banner offers a one-click "Sign in via terminal"
   // button that POSTs to the daemon. The daemon opens a system
@@ -15019,6 +15047,7 @@ export function ProjectView({
               }}
               onOpenAmrSettings={onOpenAmrSettings}
               onSwitchToAmrAndRetry={handleSwitchToAmrAndRetry}
+              onSwitchToLocalAndRetry={handleSwitchToLocalAndRetry}
               onLaunchAntigravityOauth={handleLaunchAntigravityOauth}
               onOpenMcpSettings={onOpenMcpSettings}
               onBrowsePlugins={onBrowsePlugins}

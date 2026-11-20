@@ -646,7 +646,7 @@ import {
   validateBaseUrl,
   validateBaseUrlResolved,
 } from './connectionTest.js';
-import { listProviderModels } from './integrations/provider-models.js';
+import { listProviderModels, resolveLocalLlamaProvider } from './integrations/provider-models.js';
 import { importClaudeDesignZip } from './design/index.js';
 
 import { buildDocumentPreview } from './document-preview.js';
@@ -11784,12 +11784,31 @@ export async function startServer({
       );
     if (!def.bin)
       return failRun('AGENT_UNAVAILABLE', 'agent has no binary');
-    const byokOpenCodeProvider = def.id === 'byok-opencode'
+    let byokOpenCodeProvider = def.id === 'byok-opencode'
       ? buildOpenCodeByokProviderConfig(
           byokProvider,
           typeof model === 'string' ? model : null,
         )
       : null;
+    if (def.id === 'byok-opencode' && !byokOpenCodeProvider) {
+      // Fork: no usable provider on the run — fall back to the local
+      // llama-server (LFM3) so a no-key session still runs instead of
+      // failing with "provider required". A configured provider always
+      // wins; this only fires when the client sent nothing usable.
+      const local = await resolveLocalLlamaProvider();
+      if (local) {
+        byokOpenCodeProvider = buildOpenCodeByokProviderConfig(
+          {
+            protocol: 'openai',
+            apiKey: '',
+            baseUrl: local.baseUrl,
+            model: local.model,
+            requiresApiKey: false,
+          },
+          local.model,
+        );
+      }
+    }
     if (def.id === 'byok-opencode' && !byokOpenCodeProvider) {
       return failRun(
         'BYOK_PROVIDER_REQUIRED',

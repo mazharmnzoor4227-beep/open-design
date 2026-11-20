@@ -848,6 +848,12 @@ interface Props {
   onSwitchToLocalCli?: () => void;
   onOpenAmrSettings?: () => void;
   onSwitchToAmrAndRetry?: (failedAssistant: ChatMessage) => void;
+  // Fork: local retry for a failed run — switches the agent to
+  // byok-opencode (the daemon falls back to the local llama-server when
+  // no provider is set) and re-runs the failed turn. Replaces the Cloud
+  // switch CTA wherever the host wires it; the Cloud branch below stays
+  // only for hosts that don't wire this prop.
+  onSwitchToLocalAndRetry?: (failedAssistant: ChatMessage) => void;
   // PR #3157: Antigravity's `agy -p` can't complete OAuth on its own,
   // so the auth banner offers a "Sign in via terminal" button that
   // POSTs to /api/agents/antigravity/oauth-launch. Handler resolves
@@ -1432,6 +1438,7 @@ export function ChatPane({
   onAmrBalanceUpgrade,
   onOpenAmrSettings,
   onSwitchToAmrAndRetry,
+  onSwitchToLocalAndRetry,
   onOpenMcpSettings,
   onBrowsePlugins,
   onOpenConnectors,
@@ -2551,6 +2558,20 @@ export function ChatPane({
     retryAssistant && !failedRunUsesCloud
     && (onSwitchToAmrAndRetry || onOpenAmrSettings),
   );
+  // Fork: the local retry replaces the Cloud switch for the agents the
+  // local path replaces — Antigravity (not signed in / no account in the
+  // fork) and stock OpenCode (no provider of its own). A failure on one of
+  // those falls back to the free local model, never to the paid cloud. A
+  // failure already on byok-opencode is a provider problem, not an agent
+  // problem, so the plain Retry / model picker covers it; other local
+  // agents keep the upstream Cloud recovery (OPEND-3205 pins that flow,
+  // and those agents are not installed on this fork's server).
+  const showLocalSwitchCta = Boolean(
+    retryAssistant
+    && !failedRunUsesCloud
+    && (retryAssistant.agentId === 'antigravity' || retryAssistant.agentId === 'opencode')
+    && onSwitchToLocalAndRetry,
+  );
   const [supportDialogOpen, setSupportDialogOpen] = useState(false);
   // The separate balance card retains its existing plans entry.
   const openAmrPlans = useCallback((entrySource: 'chat_upgrade_card') => {
@@ -2569,9 +2590,12 @@ export function ChatPane({
     const actions: TrackingRunRecoveryActionType[] = [];
     if (!displayError) return actions;
     if (showCloudRetry) actions.push('manual_retry');
-    if (showCloudSwitchCta && onSwitchToAmrAndRetry) actions.push('switch_runtime_retry');
+    if (
+      (showCloudSwitchCta && onSwitchToAmrAndRetry)
+      || (showLocalSwitchCta && onSwitchToLocalAndRetry)
+    ) actions.push('switch_runtime_retry');
     return actions;
-  }, [displayError, onSwitchToAmrAndRetry, showCloudRetry, showCloudSwitchCta]);
+  }, [displayError, onSwitchToAmrAndRetry, onSwitchToLocalAndRetry, showCloudRetry, showCloudSwitchCta, showLocalSwitchCta]);
   const recoveryAnalyticsProps = useCallback((
     assistantMessage: ChatMessage,
     actionType: TrackingRunRecoveryActionType,
@@ -4630,7 +4654,24 @@ export function ChatPane({
                             {t(retryLabelKey)}
                           </RunErrorCardAction>
                         ) : null}
-                        {showCloudSwitchCta ? (
+                        {showLocalSwitchCta && retryAssistant ? (
+                          <RunErrorCardAction
+                            type="button"
+                            variant="primary"
+                            data-testid="chat-error-switch-to-local"
+                            disabled={recoveryActionsDisabled}
+                            onClick={() => {
+                              trackRecoveryClick(retryAssistant, 'switch_runtime_retry', {
+                                agentProviderId: 'byok-opencode',
+                                modelId: config?.model?.trim() || 'lfm3-1.7b',
+                              });
+                              onSwitchToLocalAndRetry?.(retryAssistant);
+                            }}
+                          >
+                            <Icon name="refresh" size={11} />
+                            {t('settings.byokUseLocal')}
+                          </RunErrorCardAction>
+                        ) : showCloudSwitchCta ? (
                           <RunErrorCardAction
                             type="button"
                             variant="primary"

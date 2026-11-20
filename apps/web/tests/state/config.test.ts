@@ -9,9 +9,12 @@ import {
   isStoredMediaProviderEntryPresent,
   KNOWN_PROVIDERS,
   loadConfig,
+  LOCAL_LLAMA_BASE_URL,
+  LOCAL_LLAMA_MODEL,
   mergeDaemonConfig,
   mergeDaemonMediaProviders,
   saveConfig,
+  seedLocalDefaultProvider,
   shouldSyncLocalMediaProvidersToDaemon,
   syncComposioConfigToDaemon,
   syncConfigToDaemon,
@@ -89,8 +92,10 @@ describe('KNOWN_PROVIDERS', () => {
       (provider) => provider.label === 'OpenRouter',
     );
 
+    // Fork: the OpenRouter default is the free Nemotron model (live-checked
+    // 2026-11-20 — no DeepSeek/Qwen free variant exists right now).
     expect(defaultKnownProviderModel(openRouter)).toBe(
-      'anthropic/claude-sonnet-4.6',
+      'nvidia/nemotron-3.5-lightning:free',
     );
     expect(openRouter?.retiredModels).toEqual([
       'anthropic/claude-3.7-sonnet',
@@ -1092,7 +1097,9 @@ describe('loadConfig', () => {
 
     const config = loadConfig();
 
-    expect(config.model).toBe('anthropic/claude-sonnet-4.6');
+    // Fork: the retired default migrates to the current OpenRouter default,
+    // the free Nemotron model.
+    expect(config.model).toBe('nvidia/nemotron-3.5-lightning:free');
     expect(config.configMigrationVersion).toBe(3);
   });
 
@@ -1136,8 +1143,11 @@ describe('loadConfig', () => {
     });
     try {
       const config = loadConfig();
-      // the unsupported protocol was still downgraded ...
-      expect(config.apiProtocol).toBe(DEFAULT_CONFIG.apiProtocol);
+      // The unsupported protocol was still downgraded — and the fork's
+      // no-key seed then defaults the provider to the local llama-server,
+      // since the downgraded Anthropic default cannot run without a key.
+      expect(config.apiProtocol).toBe('openai');
+      expect(config.baseUrl).toBe(LOCAL_LLAMA_BASE_URL);
       // ... but the rest of the user's config was NOT discarded to defaults
       expect(config.mode).toBe('api');
     } finally {
@@ -1230,7 +1240,7 @@ describe('loadConfig', () => {
     expect(config.apiProtocol).toBe('anthropic');
   });
 
-  it('downgrades legacy Bedrock Runtime configs to the default chat protocol', () => {
+  it('downgrades legacy Bedrock Runtime configs to the fork local default', () => {
     const legacyConfig: Partial<AppConfig> = {
       mode: 'api',
       apiKey: 'bedrock-secret',
@@ -1245,12 +1255,15 @@ describe('loadConfig', () => {
 
     const config = loadConfig();
 
-    expect(config.apiProtocol).toBe('anthropic');
+    // Fork: the Bedrock protocol is downgraded and the no-key seed applies
+    // the local llama-server default (the Anthropic default cannot run
+    // without a key); the secrets are still cleared.
+    expect(config.apiProtocol).toBe('openai');
     expect(config.apiKey).toBe('');
     expect(config.apiVersion).toBe('');
-    expect(config.baseUrl).toBe(DEFAULT_CONFIG.baseUrl);
-    expect(config.model).toBe(DEFAULT_CONFIG.model);
-    expect(config.apiProviderBaseUrl).toBe(DEFAULT_CONFIG.apiProviderBaseUrl);
+    expect(config.baseUrl).toBe(LOCAL_LLAMA_BASE_URL);
+    expect(config.model).toBe(LOCAL_LLAMA_MODEL);
+    expect(config.apiProviderBaseUrl).toBe(LOCAL_LLAMA_BASE_URL);
   });
 
   it('downgrades explicitly persisted Bedrock configs to the default chat protocol', () => {
@@ -1471,7 +1484,24 @@ describe('loadConfig', () => {
   it('returns defaults for malformed localStorage JSON', () => {
     store.set('open-design:config', '{broken-json');
 
-    expect(loadConfig()).toEqual(DEFAULT_CONFIG);
+    // Fork: a fresh profile with no key defaults to the local llama-server,
+    // so the malformed-JSON fallback is the seeded Local provider, not the
+    // Anthropic default (which cannot run without a key).
+    expect(loadConfig()).toEqual({
+      ...DEFAULT_CONFIG,
+      apiProtocol: 'openai',
+      baseUrl: LOCAL_LLAMA_BASE_URL,
+      model: LOCAL_LLAMA_MODEL,
+      apiProviderBaseUrl: LOCAL_LLAMA_BASE_URL,
+      apiProtocolConfigs: {
+        openai: expect.objectContaining({
+          apiKey: '',
+          baseUrl: LOCAL_LLAMA_BASE_URL,
+          model: LOCAL_LLAMA_MODEL,
+          apiProviderBaseUrl: LOCAL_LLAMA_BASE_URL,
+        }),
+      },
+    });
   });
 
   it('sets an explicit apiProtocol for new default configs', () => {
@@ -1608,5 +1638,67 @@ describe('saveConfig', () => {
       claude: { apiKeyOverride: true },
       codex: { apiKeyOverride: true },
     });
+  });
+});
+
+// Fork: the no-key default provider — a fresh "Continue without a key"
+// session must work immediately with the local llama-server (LFM3).
+describe('seedLocalDefaultProvider', () => {
+  it('seeds the local llama-server preset into a keyless default config', () => {
+    const config: AppConfig = { ...DEFAULT_CONFIG };
+    expect(seedLocalDefaultProvider(config)).toBe(true);
+    expect(config.apiProtocol).toBe('openai');
+    expect(config.baseUrl).toBe(LOCAL_LLAMA_BASE_URL);
+    expect(config.model).toBe(LOCAL_LLAMA_MODEL);
+    expect(config.apiProviderBaseUrl).toBe(LOCAL_LLAMA_BASE_URL);
+    // The openai shadow slot is seeded too, so the Local provider survives
+    // a later protocol switch away and back.
+    expect(config.apiProtocolConfigs?.openai).toMatchObject({
+      apiKey: '',
+      baseUrl: LOCAL_LLAMA_BASE_URL,
+      model: LOCAL_LLAMA_MODEL,
+      apiProviderBaseUrl: LOCAL_LLAMA_BASE_URL,
+    });
+  });
+
+  it('leaves a config with a top-level key alone', () => {
+    const config: AppConfig = { ...DEFAULT_CONFIG, apiKey: 'sk-ant-test' };
+    expect(seedLocalDefaultProvider(config)).toBe(false);
+    expect(config.apiProtocol).toBe('anthropic');
+    expect(config.model).toBe('claude-sonnet-4-5');
+    expect(config.baseUrl).toBe('https://api.anthropic.com');
+  });
+
+  it('leaves a config with a key in a protocol slot alone', () => {
+    const config: AppConfig = {
+      ...DEFAULT_CONFIG,
+      apiProtocolConfigs: {
+        openai: {
+          apiKey: 'sk-or-test',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          model: 'nvidia/nemotron-3.5-lightning:free',
+        },
+      },
+    };
+    expect(seedLocalDefaultProvider(config)).toBe(false);
+    expect(config.apiProtocol).toBe('anthropic');
+    expect(config.model).toBe('claude-sonnet-4-5');
+  });
+
+  it('leaves an explicitly-picked custom endpoint alone', () => {
+    const config: AppConfig = {
+      ...DEFAULT_CONFIG,
+      baseUrl: 'http://localhost:11434/v1',
+      apiProviderBaseUrl: 'http://localhost:11434/v1',
+    };
+    expect(seedLocalDefaultProvider(config)).toBe(false);
+    expect(config.baseUrl).toBe('http://localhost:11434/v1');
+  });
+
+  it('seeds a fresh profile through loadConfig', () => {
+    const config = loadConfig();
+    expect(config.model).toBe(LOCAL_LLAMA_MODEL);
+    expect(config.baseUrl).toBe(LOCAL_LLAMA_BASE_URL);
+    expect(config.apiProtocol).toBe('openai');
   });
 });
