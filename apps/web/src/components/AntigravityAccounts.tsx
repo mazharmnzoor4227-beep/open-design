@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { AntigravityAccount } from '@open-design/contracts/api/antigravityAccounts';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type {
+  AntigravityAccount,
+  AntigravityAuthSession,
+} from '@open-design/contracts/api/antigravityAccounts';
 import { useT } from '../i18n';
 import {
+  ANTIGRAVITY_AUTH_POLL_MS,
   activateAntigravityAccount,
+  cancelAntigravityAuth,
   clearAntigravityAccountQuota,
   createAntigravityAccount,
   fetchAntigravityAccounts,
+  fetchAntigravityAuth,
   removeAntigravityAccount,
+  startAntigravityAuth,
+  submitAntigravityAuthCode,
 } from '../providers/antigravity-accounts';
 import styles from './AntigravityAccounts.module.css';
 
@@ -14,10 +22,12 @@ import styles from './AntigravityAccounts.module.css';
 // agent grid). Stock `agy` holds one Google login at a time; the fork
 // keeps one credential home per connected account, so up to 5 accounts
 // can be connected and runs rotate to the next one when the active
-// account hits its quota. Adding an account only creates the registry
-// entry + home dir — the Google sign-in itself happens in a terminal
-// on the daemon host (`HOME=<homeDir> agy`), whose command this panel
-// shows after adding. Same endpoints as `od antigravity accounts …`.
+// account hits its quota.
+//
+// Signing in is Axion-style and needs no terminal: the daemon runs `agy`
+// in a PTY, shows the Google sign-in URL as a clickable link, and the
+// user pastes the one-time code back. Same endpoints as
+// `od antigravity auth …`.
 
 interface Props {
   /** True when the agy CLI was detected on PATH. The panel hides
@@ -36,6 +46,10 @@ function formatQuotaUntil(iso: string): string {
   });
 }
 
+function isTerminalAuthStatus(status: AntigravityAuthSession['status']): boolean {
+  return status === 'signed-in' || status === 'error' || status === 'expired';
+}
+
 export function AntigravityAccounts({ antigravityAvailable }: Props) {
   const t = useT();
   const [accounts, setAccounts] = useState<AntigravityAccount[] | null>(null);
@@ -44,13 +58,31 @@ export function AntigravityAccounts({ antigravityAvailable }: Props) {
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<string | null>(null);
-  const [justAdded, setJustAdded] = useState<AntigravityAccount | null>(null);
+  // One live sign-in session per account (in-memory on the daemon).
+  const [authById, setAuthById] = useState<
+    Record<string, AntigravityAuthSession>
+  >({});
+  const [authCodeById, setAuthCodeById] = useState<Record<string, string>>({});
+  const [authBusyById, setAuthBusyById] = useState<Record<string, boolean>>({});
+  const [authErrorById, setAuthErrorById] = useState<
+    Record<string, string | null>
+  >({});
 
   const refresh = useCallback(async () => {
     try {
       const data = await fetchAntigravityAccounts();
       setAccounts(data.accounts);
       setLoadError(null);
+      // Drop sign-in state for accounts that no longer exist so a
+      // removed account's session can never keep the poller alive.
+      const ids = new Set(data.accounts.map((account) => account.id));
+      setAuthById((prev) => {
+        const next: Record<string, AntigravityAuthSession> = {};
+        for (const [id, session] of Object.entries(prev)) {
+          if (ids.has(id)) next[id] = session;
+        }
+        return next;
+      });
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     }
@@ -59,6 +91,88 @@ export function AntigravityAccounts({ antigravityAvailable }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const liveAuthIds = useMemo(
+    () =>
+      Object.values(authById)
+        .filter((session) => !isTerminalAuthStatus(session.status))
+        .map((session) => session.accountId),
+    [authById],
+  );
+
+  // Re-read live sign-ins every 2s until they land (signed-in / error /
+  // expired). A failed tick keeps the last known session; the next tick
+  // retries.
+  useEffect(() => {
+    if (liveAuthIds.length === 0) return undefined;
+    const timer = setInterval(() => {
+      void (async () => {
+        for (const id of liveAuthIds) {
+          try {
+            const session = await fetchAntigravityAuth(id);
+            setAuthById((prev) => ({ ...prev, [id]: session }));
+            if (session.status === 'signed-in') void refresh();
+          } catch {
+            // Keep the last known session; the next tick retries.
+          }
+        }
+      })();
+    }, ANTIGRAVITY_AUTH_POLL_MS);
+    return () => clearInterval(timer);
+  }, [liveAuthIds, refresh]);
+
+  const startAuth = useCallback(async (id: string) => {
+    setAuthBusyById((prev) => ({ ...prev, [id]: true }));
+    setAuthErrorById((prev) => ({ ...prev, [id]: null }));
+    try {
+      const session = await startAntigravityAuth(id);
+      setAuthById((prev) => ({ ...prev, [id]: session }));
+      setAuthCodeById((prev) => ({ ...prev, [id]: '' }));
+    } catch (err) {
+      setAuthErrorById((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : String(err),
+      }));
+    } finally {
+      setAuthBusyById((prev) => ({ ...prev, [id]: false }));
+    }
+  }, []);
+
+  const submitAuthCode = useCallback(
+    async (id: string) => {
+      const code = (authCodeById[id] ?? '').trim();
+      if (!code || authBusyById[id]) return;
+      setAuthBusyById((prev) => ({ ...prev, [id]: true }));
+      setAuthErrorById((prev) => ({ ...prev, [id]: null }));
+      try {
+        const session = await submitAntigravityAuthCode(id, code);
+        setAuthById((prev) => ({ ...prev, [id]: session }));
+      } catch (err) {
+        setAuthErrorById((prev) => ({
+          ...prev,
+          [id]: err instanceof Error ? err.message : String(err),
+        }));
+      } finally {
+        setAuthBusyById((prev) => ({ ...prev, [id]: false }));
+      }
+    },
+    [authBusyById, authCodeById],
+  );
+
+  const cancelAuth = useCallback(async (id: string) => {
+    setAuthBusyById((prev) => ({ ...prev, [id]: true }));
+    try {
+      const session = await cancelAntigravityAuth(id);
+      setAuthById((prev) => ({ ...prev, [id]: session }));
+    } catch (err) {
+      setAuthErrorById((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : String(err),
+      }));
+    } finally {
+      setAuthBusyById((prev) => ({ ...prev, [id]: false }));
+    }
+  }, []);
 
   if (accounts !== null && accounts.length === 0 && !antigravityAvailable) {
     return null;
@@ -86,8 +200,9 @@ export function AntigravityAccounts({ antigravityAvailable }: Props) {
     try {
       const account = await createAntigravityAccount(trimmed);
       setLabel('');
-      setJustAdded(account);
       await refresh();
+      // Open the Google sign-in for the new account straight away.
+      await startAuth(account.id);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -106,93 +221,221 @@ export function AntigravityAccounts({ antigravityAvailable }: Props) {
         <p className="hint">{t('settings.antigravityAccountsEmpty')}</p>
       ) : (
         <ul className={styles.list}>
-          {accounts.map((account) => (
-            <li key={account.id} className={styles.row}>
-              <div className={styles.rowBody}>
-                <span className={styles.label}>{account.label}</span>
-                <span className={styles.badges}>
-                  {account.active ? (
-                    <span className={styles.badgeActive}>
-                      {t('settings.antigravityAccountActive')}
-                    </span>
-                  ) : null}
-                  {account.quotaExhausted && account.quotaExhaustedUntil ? (
-                    <span className={styles.badgeQuota}>
-                      {t('settings.antigravityAccountQuotaExhausted', {
-                        until: formatQuotaUntil(account.quotaExhaustedUntil),
+          {accounts.map((account) => {
+            const auth = authById[account.id] ?? null;
+            const authLive = auth !== null && !isTerminalAuthStatus(auth.status);
+            const authError = authErrorById[account.id] ?? null;
+            const connectedEmail = auth?.email ?? account.email;
+            return (
+              <li key={account.id} className={styles.row}>
+                <div className={styles.rowBody}>
+                  <span className={styles.label}>{account.label}</span>
+                  <span className={styles.badges}>
+                    {account.active ? (
+                      <span className={styles.badgeActive}>
+                        {t('settings.antigravityAccountActive')}
+                      </span>
+                    ) : null}
+                    {account.quotaExhausted && account.quotaExhaustedUntil ? (
+                      <span className={styles.badgeQuota}>
+                        {t('settings.antigravityAccountQuotaExhausted', {
+                          until: formatQuotaUntil(account.quotaExhaustedUntil),
+                        })}
+                      </span>
+                    ) : null}
+                  </span>
+                  {connectedEmail ? (
+                    <span className={styles.email}>
+                      {t('settings.antigravityConnectedAs', {
+                        email: connectedEmail,
                       })}
                     </span>
                   ) : null}
-                </span>
-              </div>
-              <div className={styles.actions}>
-                {!account.active ? (
-                  <button
-                    type="button"
-                    className="ghost settings-test-btn"
-                    disabled={busyId === account.id}
-                    onClick={() =>
-                      void runAction(account.id, () =>
-                        activateAntigravityAccount(account.id),
-                      )
-                    }
-                  >
-                    {t('settings.antigravityAccountSwitch')}
-                  </button>
+                </div>
+                <div className={styles.actions}>
+                  {!authLive ? (
+                    <button
+                      type="button"
+                      className="ghost settings-test-btn"
+                      disabled={authBusyById[account.id] === true}
+                      onClick={() => void startAuth(account.id)}
+                    >
+                      {t('settings.antigravityAccountConnect')}
+                    </button>
+                  ) : null}
+                  {!account.active ? (
+                    <button
+                      type="button"
+                      className="ghost settings-test-btn"
+                      disabled={busyId === account.id}
+                      onClick={() =>
+                        void runAction(account.id, () =>
+                          activateAntigravityAccount(account.id),
+                        )
+                      }
+                    >
+                      {t('settings.antigravityAccountSwitch')}
+                    </button>
+                  ) : null}
+                  {account.quotaExhausted ? (
+                    <button
+                      type="button"
+                      className="ghost settings-test-btn"
+                      disabled={busyId === account.id}
+                      onClick={() =>
+                        void runAction(account.id, () =>
+                          clearAntigravityAccountQuota(account.id),
+                        )
+                      }
+                    >
+                      {t('settings.antigravityAccountClearQuota')}
+                    </button>
+                  ) : null}
+                  {confirmingRemoveId === account.id ? (
+                    <button
+                      type="button"
+                      className="ghost settings-test-btn"
+                      disabled={busyId === account.id}
+                      onClick={() => {
+                        setConfirmingRemoveId(null);
+                        void runAction(account.id, () =>
+                          removeAntigravityAccount(account.id),
+                        );
+                      }}
+                    >
+                      {t('settings.antigravityAccountRemoveConfirm')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="ghost settings-test-btn"
+                      onClick={() => setConfirmingRemoveId(account.id)}
+                    >
+                      {t('settings.antigravityAccountRemove')}
+                    </button>
+                  )}
+                </div>
+                {auth !== null ? (
+                  <div className={styles.signIn}>
+                    <p className={styles.signInTitle}>
+                      {t('settings.antigravityAccountSignInTitle')}
+                    </p>
+                    {authError ? <p className={styles.error}>{authError}</p> : null}
+                    {auth.status === 'starting' ||
+                    auth.status === 'completing' ? (
+                      <p className="hint">
+                        {t('settings.antigravityAuthWaiting')}
+                      </p>
+                    ) : null}
+                    {auth.status === 'awaiting-code' && auth.url ? (
+                      <>
+                        <a
+                          className={styles.authLink}
+                          href={auth.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {t('settings.antigravitySignInOpenLink')}
+                        </a>
+                        <p className="hint">
+                          {t('settings.antigravityCodeHint')}
+                        </p>
+                        <div className={styles.authCodeRow}>
+                          <input
+                            type="text"
+                            value={authCodeById[account.id] ?? ''}
+                            placeholder={t(
+                              'settings.antigravityCodePlaceholder',
+                            )}
+                            aria-label={t('settings.antigravityCodeLabel')}
+                            autoComplete="off"
+                            onChange={(event) =>
+                              setAuthCodeById((prev) => ({
+                                ...prev,
+                                [account.id]: event.target.value,
+                              }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter')
+                                void submitAuthCode(account.id);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="settings-test-btn"
+                            disabled={
+                              !(authCodeById[account.id] ?? '').trim() ||
+                              authBusyById[account.id] === true
+                            }
+                            onClick={() => void submitAuthCode(account.id)}
+                          >
+                            {t('settings.antigravityCodeSubmit')}
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                    {auth.status === 'signed-in' ? (
+                      <p className="hint">
+                        {t('settings.antigravityConnectedAs', {
+                          email:
+                            auth.email ?? account.email ?? account.label,
+                        })}
+                      </p>
+                    ) : null}
+                    {auth.status === 'error' ? (
+                      <>
+                        <p className={styles.error}>
+                          {auth.error ??
+                            t('settings.antigravityAuthFailed')}
+                        </p>
+                        <div className={styles.actions}>
+                          <button
+                            type="button"
+                            className="ghost settings-test-btn"
+                            disabled={authBusyById[account.id] === true}
+                            onClick={() => void startAuth(account.id)}
+                          >
+                            {t('settings.antigravityAccountConnect')}
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                    {auth.status === 'expired' ? (
+                      <>
+                        <p className="hint">
+                          {t('settings.antigravityAuthExpired')}
+                        </p>
+                        <div className={styles.actions}>
+                          <button
+                            type="button"
+                            className="ghost settings-test-btn"
+                            disabled={authBusyById[account.id] === true}
+                            onClick={() => void startAuth(account.id)}
+                          >
+                            {t('settings.antigravityAccountConnect')}
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                    {authLive ? (
+                      <div className={styles.actions}>
+                        <button
+                          type="button"
+                          className="ghost settings-test-btn"
+                          disabled={authBusyById[account.id] === true}
+                          onClick={() => void cancelAuth(account.id)}
+                        >
+                          {t('common.cancel')}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
-                {account.quotaExhausted ? (
-                  <button
-                    type="button"
-                    className="ghost settings-test-btn"
-                    disabled={busyId === account.id}
-                    onClick={() =>
-                      void runAction(account.id, () =>
-                        clearAntigravityAccountQuota(account.id),
-                      )
-                    }
-                  >
-                    {t('settings.antigravityAccountClearQuota')}
-                  </button>
-                ) : null}
-                {confirmingRemoveId === account.id ? (
-                  <button
-                    type="button"
-                    className="ghost settings-test-btn"
-                    disabled={busyId === account.id}
-                    onClick={() => {
-                      setConfirmingRemoveId(null);
-                      void runAction(account.id, () =>
-                        removeAntigravityAccount(account.id),
-                      );
-                    }}
-                  >
-                    {t('settings.antigravityAccountRemoveConfirm')}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="ghost settings-test-btn"
-                    onClick={() => setConfirmingRemoveId(account.id)}
-                  >
-                    {t('settings.antigravityAccountRemove')}
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
-      {justAdded ? (
-        <div className={styles.signIn}>
-          <p className={styles.signInTitle}>
-            {t('settings.antigravityAccountSignInTitle')}
-          </p>
-          <p className="hint">{t('settings.antigravityAccountSignInHint')}</p>
-          <code className={styles.signInCommand}>
-            HOME={justAdded.homeDir} agy
-          </code>
-        </div>
-      ) : null}
       <div className={styles.addRow}>
         <input
           type="text"

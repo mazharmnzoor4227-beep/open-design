@@ -1,0 +1,8 @@
+# Fork runtime image: fork source build + glibc compat for the host-mounted
+# Antigravity CLI (agy is a glibc-linked aarch64 binary; the host lib dir
+# is mounted at /lib/aarch64-linux-gnu at run time, and this symlink gives
+# it the loader path it expects).
+FROM open-design-fork:latest
+USER root
+RUN apk add --no-cache libc6-compat && ln -sf aarch64-linux-gnu/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1
+USER open-design

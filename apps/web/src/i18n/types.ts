@@ -373,9 +373,6 @@ export interface Dict {
   'settings.onboardingConnectBody': string;
   'settings.onboardingCloudTitle': string;
   'settings.onboardingCloudBody': string;
-  'settings.onboardingCloudSignIn': string;
-  'settings.onboardingFreeCredits': string;
-  'settings.onboardingFreeCreditsHint': string;
   'settings.onboardingOwnAi': string;
   'settings.onboardingLocalAi': string;
   'settings.onboardingApiKey': string;
@@ -520,7 +517,6 @@ export interface Dict {
   'settings.antigravityAccountAddLabel': string;
   'settings.antigravityAccountAdd': string;
   'settings.antigravityAccountSignInTitle': string;
-  'settings.antigravityAccountSignInHint': string;
   'settings.testCancel': string;
   'settings.testRetry': string;
   'settings.required': string;
@@ -1257,7 +1253,6 @@ export interface Dict {
   'entry.openSettingsTitle': string;
   'entry.openSettingsAria': string;
   'entry.communityLabel': string;
-  'entry.communityAria': string;
   'entry.discordAriaWithOnline': string;
   'entry.discordOnlineLabel': string;
   'entry.xAria': string;

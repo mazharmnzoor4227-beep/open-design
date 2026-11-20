@@ -321,7 +321,7 @@ const PROVIDER_STRING_FLAGS = new Set(['daemon-url', 'api-key']);
 const PROVIDER_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 // `od antigravity accounts …` manages the connected Antigravity
 // accounts (one agy login per account home; runs rotate on quota).
-const ANTIGRAVITY_STRING_FLAGS = new Set(['daemon-url', 'label']);
+const ANTIGRAVITY_STRING_FLAGS = new Set(['daemon-url', 'label', 'code']);
 const ANTIGRAVITY_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const MEMORY_STRING_FLAGS = new Set([
   'daemon-url', 'name', 'description', 'type', 'body', 'body-file',
@@ -1235,8 +1235,9 @@ function printRootHelp() {
   od antigravity accounts <list|add|activate|remove|clear-quota> [args]
       Manage the connected Antigravity accounts. Each account keeps its
       own agy login in its own credential home; runs rotate to the next
-      account when one hits its quota. Sign a new account in with the
-      HOME=… agy command the add step prints.
+      account when one hits its quota. Sign a new account in with
+      od antigravity auth start <id> or from Settings → Antigravity
+      accounts → Connect.
 
   od message-center <list|read|read-all> [args]
       Read and acknowledge message-center inbox items through the same
@@ -12364,17 +12365,41 @@ function printAntigravityHelp() {
   od antigravity accounts list [--json]
       List the connected Antigravity accounts (active + quota flags).
   od antigravity accounts add --label "Account 1" [--json]
-      Connect another Antigravity account. Prints the HOME=… agy
-      sign-in command — run it in a terminal and complete the Google
-      sign-in in your browser; the login is stored in that account's
-      own credential home.
+      Connect another Antigravity account. Sign it in with
+      od antigravity auth start <id> or from Settings → Antigravity
+      accounts → Connect; the login is stored in that account's own
+      credential home.
   od antigravity accounts activate <id> [--json]
       Switch the active account (no re-login needed).
   od antigravity accounts remove <id> [--json]
       Remove an account and delete its stored login.
   od antigravity accounts clear-quota <id> [--json]
       Clear a quota-exhausted flag by hand (it auto-expires in 24h).
+  od antigravity auth start <id> [--json]
+      Start the in-app Google sign-in for an account. Prints the
+      Google sign-in URL — open it in your browser, sign in, then
+      complete it with od antigravity auth code <id>.
+  od antigravity auth status <id> [--json]
+      Show the current sign-in session (status, URL, signed-in email).
+  od antigravity auth code <id> [--code <code>] [--json]
+      Paste the one-time code from Google back (flag or stdin).
+  od antigravity auth cancel <id> [--json]
+      Cancel a sign-in in progress.
 `);
+}
+
+function printAntigravityAuthSession(session) {
+  console.log(
+    `Sign-in ${session.id} for account ${session.accountId}: ${session.status}`,
+  );
+  if (session.url) {
+    console.log('Open this Google sign-in URL in your browser:');
+    console.log(`  ${session.url}`);
+    console.log('Then complete the one-time code with:');
+    console.log(`  od antigravity auth code ${session.accountId} [--code <code>]`);
+  }
+  if (session.email) console.log(`Connected as ${session.email}`);
+  if (session.error) console.log(`Error: ${session.error}`);
 }
 
 async function runProvider(args) {
@@ -12452,7 +12477,7 @@ async function runAntigravity(args) {
     console.error(err.message);
     process.exit(2);
   }
-  if (sub !== 'accounts') {
+  if (sub !== 'accounts' && sub !== 'auth') {
     console.error(`Unknown antigravity subcommand: ${sub}`);
     printAntigravityHelp();
     process.exit(2);
@@ -12475,6 +12500,65 @@ async function runAntigravity(args) {
     if (resp.status === 204) return null;
     return resp.json();
   };
+
+  if (sub === 'auth') {
+    const authAction = parts[0];
+    const id = parts[1];
+    if (!['start', 'status', 'code', 'cancel'].includes(authAction)) {
+      console.error(
+        'Usage: od antigravity auth <start|status|code|cancel> <id> [--json]',
+      );
+      printAntigravityHelp();
+      process.exit(2);
+    }
+    if (!id) {
+      console.error(`Usage: od antigravity auth ${authAction} <id>`);
+      process.exit(2);
+    }
+    const authPath = `/api/antigravity/accounts/${encodeURIComponent(id)}/auth`;
+    if (authAction === 'start') {
+      const data = await fetchJson(`${authPath}/start`, { method: 'POST' });
+      if (flags.json) return writeJson(data);
+      printAntigravityAuthSession(data.session);
+      return;
+    }
+    if (authAction === 'status') {
+      const data = await fetchJson(authPath);
+      if (flags.json) return writeJson(data);
+      printAntigravityAuthSession(data.session);
+      return;
+    }
+    if (authAction === 'code') {
+      // The one-time code is short-lived: --code flag or stdin, never a
+      // positional (it would land in shell history). Async stdin read:
+      // readFileSync(0) throws EAGAIN on a piped stdin that has no data
+      // yet when the process starts.
+      let code = typeof flags.code === 'string' ? flags.code : '';
+      if (!code && !process.stdin.isTTY) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) chunks.push(chunk);
+        code = Buffer.concat(chunks).toString('utf8').trim();
+      }
+      if (!code) {
+        console.error(
+          'Usage: od antigravity auth code <id> [--code <code>] (or pipe the code on stdin)',
+        );
+        process.exit(2);
+      }
+      const data = await fetchJson(`${authPath}/code`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      if (flags.json) return writeJson(data);
+      printAntigravityAuthSession(data.session);
+      return;
+    }
+    const data = await fetchJson(`${authPath}/cancel`, { method: 'POST' });
+    if (flags.json) return writeJson(data);
+    printAntigravityAuthSession(data.session);
+    return;
+  }
 
   if (action === 'list') {
     const data = await fetchJson('/api/antigravity/accounts');
@@ -12514,9 +12598,9 @@ async function runAntigravity(args) {
     if (flags.json) return writeJson(data);
     const account = data.account;
     console.log(`Added Antigravity account ${account.id} ("${account.label}").`);
-    console.log('Sign it in (browser OAuth) with:');
-    console.log(`  HOME=${account.homeDir} agy`);
-    console.log('Open the sign-in URL in your browser, complete Google sign-in, and agy stores the login in that account home.');
+    console.log('Sign it in with:');
+    console.log(`  od antigravity auth start ${account.id}`);
+    console.log('Or from Settings → Antigravity accounts → Connect. Open the Google sign-in URL in your browser, then paste the one-time code back.');
     return;
   }
   if (action === 'activate' || action === 'clear-quota') {

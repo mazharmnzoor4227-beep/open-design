@@ -53,6 +53,12 @@
   font-size: 13px;
 }
 
+.email {
+  color: var(--text-muted, inherit);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .badges {
   display: inline-flex;
   flex-wrap: wrap;
@@ -98,14 +104,20 @@
   font-weight: 600;
 }
 
-.signInCommand {
-  display: block;
-  padding: 6px 8px;
-  border-radius: var(--radius);
-  background: var(--bg-code, var(--bg-subtle));
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
+.authLink {
+  font-size: 13px;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.authCodeRow {
+  display: flex;
+  gap: 8px;
+}
+
+.authCodeRow input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .addRow {
