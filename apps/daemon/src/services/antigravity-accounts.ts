@@ -53,6 +53,9 @@ interface AntigravityAccountRecord {
   label: string;
   createdAt: string;
   quotaExhaustedUntil: string | null;
+  /** Google email captured at sign-in, or null when never signed in
+   *  through the in-app flow. Old records predate the field. */
+  email: string | null;
 }
 
 interface AntigravityAccountStore {
@@ -108,7 +111,10 @@ function isRecord(value: unknown): value is AntigravityAccountRecord {
     typeof record.label === 'string' &&
     typeof record.createdAt === 'string' &&
     (record.quotaExhaustedUntil === null ||
-      typeof record.quotaExhaustedUntil === 'string')
+      typeof record.quotaExhaustedUntil === 'string') &&
+    (record.email === undefined ||
+      record.email === null ||
+      typeof record.email === 'string')
   );
 }
 
@@ -124,7 +130,11 @@ function readAntigravityAccountStore(
     }
     const raw = parsed as Record<string, unknown>;
     const accounts = Array.isArray(raw.accounts)
-      ? raw.accounts.filter(isRecord)
+      ? raw.accounts.filter(isRecord).map((record) => ({
+          ...record,
+          // Records written before the email field carry no email.
+          email: typeof record.email === 'string' ? record.email : null,
+        }))
       : [];
     const activeAccountId =
       typeof raw.activeAccountId === 'string' &&
@@ -182,6 +192,7 @@ function toPublicAccount(
     quotaExhausted: isAntigravityAccountQuotaExhausted(record, nowMs),
     quotaExhaustedUntil: record.quotaExhaustedUntil,
     homeDir: antigravityAccountHomeDir(dataDir, record.id),
+    email: record.email ?? null,
   };
 }
 
@@ -213,6 +224,7 @@ export function createAntigravityAccount(
     label: trimmed,
     createdAt: new Date(nowMs).toISOString(),
     quotaExhaustedUntil: null,
+    email: null,
   };
   store.accounts.push(record);
   if (!store.activeAccountId) store.activeAccountId = record.id;
@@ -260,6 +272,27 @@ export function removeAntigravityAccount(
   });
   writeAntigravityAccountStore(dataDir, store);
   return true;
+}
+
+/**
+ * Record the Google email captured when an account signs in through the
+ * in-app connect flow, so Settings can show which Google account each
+ * entry is. The email is display-only; credentials stay in agy's own
+ * files inside the account home.
+ */
+export function setAntigravityAccountEmail(
+  dataDir: string,
+  accountId: string,
+  email: string | null,
+  nowMs: number = Date.now(),
+): AntigravityAccount | null {
+  if (!isValidAntigravityAccountId(accountId)) return null;
+  const store = readAntigravityAccountStore(dataDir);
+  const record = store.accounts.find((candidate) => candidate.id === accountId);
+  if (!record) return null;
+  record.email = email;
+  writeAntigravityAccountStore(dataDir, store);
+  return toPublicAccount(dataDir, record, store.activeAccountId, nowMs);
 }
 
 export function clearAntigravityAccountQuota(

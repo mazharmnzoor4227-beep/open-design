@@ -94,8 +94,6 @@ import { MessageCenter } from './MessageCenter';
 import type { EntrySettingsSection } from './EntrySettingsMenu';
 import type { Project } from '../types';
 import { isRtlLocale, useI18n } from '../i18n';
-import { communityForLocale } from '../lib/community-links';
-import { FeishuIcon } from './chat/support-brand-icons';
 import { useDismissOnOutsideInteraction } from '../hooks/useDismissOnOutsideInteraction';
 import {
   beginWorkspaceScopedRead,
@@ -1913,11 +1911,9 @@ function RailSocialRow({
   // and land back on top of the icons it describes.
   const tooltipPlacement = isRtlLocale(locale) ? 'left' : 'right';
   // One string per link doubles as the accessible name and the hover
-  // tooltip: the bubble is the only place the icons say what they do, so
-  // the copy leads with the payoff (Discord hands out credits) rather
-  // than naming the destination.
-  const community = communityForLocale(locale);
-  const communityLabel = t('entry.communityAria');
+  // tooltip: the bubble is the only place the icons say what they do.
+  // Fork: no Discord / community link — it promoted third-party free
+  // credits; the rail keeps only X and email.
   const xLabel = t('entry.xAria');
   const mailLabel = t('entry.mailAria');
   const btnClass = 'entry-nav-rail__menu-social-btn od-tooltip';
@@ -1938,20 +1934,6 @@ function RailSocialRow({
 
   return (
     <div className="entry-nav-rail__menu-social" data-testid="entry-nav-rail-social">
-      <a
-        className={btnClass}
-        href={community.href}
-        {...externalLinkProps}
-        aria-label={communityLabel}
-        {...hint(communityLabel)}
-        data-testid="entry-nav-rail-discord"
-        data-community-platform={community.platform}
-        onClick={() => track(community.platform)}
-      >
-        {community.platform === 'feishu'
-          ? <FeishuIcon monochrome width={glyph} height={glyph} />
-          : <Icon name="discord" size={glyph} />}
-      </a>
       <a
         className={btnClass}
         href={X_URL}

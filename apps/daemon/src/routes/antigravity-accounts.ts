@@ -19,11 +19,17 @@ import {
   removeAntigravityAccount,
   setActiveAntigravityAccount,
 } from '../services/antigravity-accounts.js';
+import {
+  isAntigravityAuthErrorCode,
+  type AntigravityAuthManager,
+} from '../services/antigravity-auth.js';
 
 export interface RegisterAntigravityAccountsRoutesDeps {
   paths: {
     RUNTIME_DATA_DIR: string;
   };
+  /** In-app Google sign-in driver (PTY). Created in server.ts. */
+  auth: AntigravityAuthManager;
 }
 
 function errorMessage(err: unknown): string {
@@ -35,6 +41,7 @@ export function registerAntigravityAccountsRoutes(
   deps: RegisterAntigravityAccountsRoutesDeps,
 ): void {
   const { RUNTIME_DATA_DIR } = deps.paths;
+  const auth = deps.auth;
 
   const listResponse = (): AntigravityAccountsResponse => {
     const accounts = listAntigravityAccounts(RUNTIME_DATA_DIR);
@@ -43,6 +50,20 @@ export function registerAntigravityAccountsRoutes(
       activeAccountId: accounts.find((account) => account.active)?.id ?? null,
     };
   };
+
+  function authErrorStatus(err: unknown): number {
+    if (isAntigravityAuthErrorCode(err, 'ACCOUNT_NOT_FOUND')) return 404;
+    if (isAntigravityAuthErrorCode(err, 'INVALID_ACCOUNT_ID')) return 400;
+    if (isAntigravityAuthErrorCode(err, 'CODE_REQUIRED')) return 400;
+    if (
+      isAntigravityAuthErrorCode(err, 'NO_SESSION') ||
+      isAntigravityAuthErrorCode(err, 'NOT_AWAITING_CODE')
+    ) {
+      return 409;
+    }
+    if (isAntigravityAuthErrorCode(err, 'PTY_UNAVAILABLE')) return 503;
+    return 500;
+  }
 
   app.get('/api/antigravity/accounts', (_req, res) => {
     res.json(listResponse());
@@ -96,5 +117,64 @@ export function registerAntigravityAccountsRoutes(
       return res.status(404).json({ error: 'account not found' });
     }
     return res.status(204).send();
+  });
+
+  // In-app Google sign-in (Axion-style): the daemon runs `agy` in a PTY,
+  // shows the Google sign-in URL in the UI, and the user pastes the
+  // one-time code back. No terminal, no redirect URL to copy anywhere.
+  app.post('/api/antigravity/accounts/:id/auth/start', async (req, res) => {
+    const id = req.params.id ?? '';
+    if (!isValidAntigravityAccountId(id)) {
+      return res.status(400).json({ error: 'invalid account id' });
+    }
+    try {
+      const session = await auth.start(id);
+      return res.status(201).json({ session });
+    } catch (err) {
+      return res
+        .status(authErrorStatus(err))
+        .json({ error: errorMessage(err) });
+    }
+  });
+
+  app.get('/api/antigravity/accounts/:id/auth', (req, res) => {
+    const id = req.params.id ?? '';
+    if (!isValidAntigravityAccountId(id)) {
+      return res.status(400).json({ error: 'invalid account id' });
+    }
+    const session = auth.get(id);
+    if (!session) {
+      return res.status(404).json({ error: 'no sign-in in progress' });
+    }
+    return res.json({ session });
+  });
+
+  app.post('/api/antigravity/accounts/:id/auth/code', (req, res) => {
+    const id = req.params.id ?? '';
+    if (!isValidAntigravityAccountId(id)) {
+      return res.status(400).json({ error: 'invalid account id' });
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const code = typeof body.code === 'string' ? body.code : '';
+    try {
+      const session = auth.submitCode(id, code);
+      return res.json({ session });
+    } catch (err) {
+      return res
+        .status(authErrorStatus(err))
+        .json({ error: errorMessage(err) });
+    }
+  });
+
+  app.post('/api/antigravity/accounts/:id/auth/cancel', (req, res) => {
+    const id = req.params.id ?? '';
+    if (!isValidAntigravityAccountId(id)) {
+      return res.status(400).json({ error: 'invalid account id' });
+    }
+    const session = auth.cancel(id);
+    if (!session) {
+      return res.status(404).json({ error: 'no sign-in in progress' });
+    }
+    return res.json({ session });
   });
 }

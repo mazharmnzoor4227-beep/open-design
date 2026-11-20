@@ -884,6 +884,7 @@ import {
 import { registerConnectorRoutes } from './connectors/routes.js';
 import { registerActiveContextRoutes } from './routes/active-context.js';
 import { registerAntigravityAccountsRoutes } from './routes/antigravity-accounts.js';
+import { createAntigravityAuthManager } from './services/antigravity-auth.js';
 import { registerAutomationRoutes } from './routes/automation.js';
 import { registerAttributionRoutes } from './routes/attribution.js';
 import { registerDaemonRoutes } from './routes/daemon.js';
@@ -8343,6 +8344,7 @@ export async function startServer({
 
   registerAntigravityAccountsRoutes(app, {
     paths: { RUNTIME_DATA_DIR },
+    auth: createAntigravityAuthManager(RUNTIME_DATA_DIR),
   });
 
   // Reconcile follow-up — the inline POST /api/projects body that lived

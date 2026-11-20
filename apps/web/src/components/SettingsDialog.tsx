@@ -187,9 +187,6 @@ import { MemoryModelInline } from './MemoryModelInline';
 import { MemorySection } from './MemorySection';
 import { ByokConnectionTestControl } from './byok/ByokConnectionTestControl';
 import { ByokKeyField } from './byok/ByokKeyField';
-import { ByokModelField } from './byok/ByokModelField';
-import { ByokProviderBaseUrl } from './byok/ByokProviderBaseUrl';
-import { ByokProviderPicker } from './byok/ByokProviderPicker';
 import { byokPreflightBlockReason } from './byok/preflight';
 import {
   blockingByokDraftFields,
@@ -3719,7 +3716,9 @@ export function SettingsDialog({
     // the user never picks a base URL or a model by hand. The pasted key is
     // re-asserted after the switch so a restored per-provider draft can
     // never clobber it with an older key. When the key already matches the
-    // current provider, nothing changes and no notice is shown.
+    // current provider, the free model is still applied — a pasted key
+    // always carries its provider's free model, so the key just works
+    // without the user ever opening a model picker.
     const detection = detectProviderFromApiKey(cleanedApiKey);
     if (detection) {
       const detectedPreset = BYOK_PROVIDER_PRESETS.find(
@@ -3737,6 +3736,14 @@ export function SettingsDialog({
           modelOverride: detection.freeModel,
         });
         updateApiConfig({ apiKey: cleanedApiKey });
+        setByokAutoDetectNotice({
+          providerLabel: detection.providerLabel,
+          freeModel: detection.freeModel,
+        });
+      } else if (detectedPreset && cfg.model !== detection.freeModel) {
+        // Same provider, stale model: apply the detected free model so the
+        // pasted key works immediately with no picker involved.
+        updateApiConfig({ apiKey: cleanedApiKey, model: detection.freeModel });
         setByokAutoDetectNotice({
           providerLabel: detection.providerLabel,
           freeModel: detection.freeModel,
@@ -4605,95 +4612,13 @@ export function SettingsDialog({
                 </button>
               </div>
               </div>
-              {cfg.mode === 'daemon' && !amrCardSignedIn ? (
-                // Only prompt to sign into OpenDesign Cloud when NOT already
-                // signed in — the AMR/vela session IS the cloud identity (one
-                // session drives both), so a logged-in user has nothing to do
-                // here and the callout was showing spuriously.
-                <div className="settings-cloud-signin-callout">
-                  <div>
-                    <strong className="settings-cloud-signin-callout__title">
-                      <span className="settings-cloud-signin-callout__title-icon" aria-hidden>
-                        <Icon name="sparkles" size={12} />
-                      </span>
-                      {t('entry.cloudCreditsTitle')}
-                    </strong>
-                    <p>{t('entry.cloudCreditsBody')}</p>
-                  </div>
-                  {/* Same device-auth flow as the 授权 button on the OpenDesign
-                      agent card below — the AMR/vela session IS the cloud
-                      identity, so signing in here is that one flow. This used to
-                      navigate to onboarding, which walked the user through the
-                      whole first-run tour to reach the same authorization. */}
-                  <AmrLoginPill
-                    className="settings-cloud-signin-callout__button"
-                    hideSignedOutStatus
-                    hideSignedInStatus
-                    initialStatus={amrCardStatus}
-                    skipInitialRefresh
-                    signInLabel={t('entry.cloudCreditsCta')}
-                    signInIcon="log-in"
-                    revealPendingCancelAction
-                    amrEntrySourceDetail="settings_cloud_callout"
-                    metricsConsent={cfg.telemetry?.metrics === true}
-                    installationId={cfg.installationId}
-                    onStatusChange={setAmrCardStatus}
-                    onSignedOut={onAmrSignedOut}
-                  />
-                </div>
-              ) : null}
-              {cfg.mode === 'api' ? (
-                <div
-                  className="protocol-chips protocol-chips--providers"
-                  role="tablist"
-                  aria-label={t('settings.protocolAria')}
-                >
-                  <div className="protocol-chip-group protocol-chip-group--providers">
-                    <div className="protocol-chip-group-options">
-                      {byokProviderOptions.map((provider) => {
-                        const active = selectedByokProvider?.id === provider.id;
-                        const configured = byokProviderConfigured(provider);
-                        const statusLabel = configured
-                          ? t('settings.mediaProviderConfigured')
-                          : t('settings.mediaProviderUnset');
-                        return (
-                          <button
-                            key={provider.id}
-                            type="button"
-                            role="tab"
-                            aria-selected={active}
-                            aria-label={provider.title}
-                            className={'protocol-chip protocol-chip--provider' + (active ? ' active' : '')}
-                            title={`${provider.title} - ${statusLabel}`}
-                            onClick={() => {
-                              const byokProviderId = byokProtocolToTracking(provider.protocol);
-                              if (byokProviderId) {
-                                trackSettingsByokProviderOptionClick(analytics.track, {
-                                  page_name: 'settings',
-                                  area: 'configure_execution_mode_byok',
-                                  element: 'byok_provider_option',
-                                  action: 'select_byok_provider',
-                                  provider_id: byokProviderId,
-                                  is_selected: active,
-                                });
-                              }
-                              if (!active) {
-                                setByokProvider(provider);
-                              }
-                            }}
-                          >
-                            <span
-                              className={`protocol-chip-status${configured ? ' is-configured' : ' is-unset'}`}
-                              aria-hidden
-                            />
-                            <span>{provider.title}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
+              {/* Fork: no cloud sign-up / free-credit promotion anywhere — the
+                  app is the user's own; sign-in to a third-party cloud has
+                  no place in Settings. */}
+
+              {/* Fork: no provider chips — the pasted key auto-detects its
+                  provider; the user never picks one by hand. */}
+
           {cfg.mode === 'daemon' ? (
             <section className="settings-section">
               <div className="section-head">
@@ -5079,7 +5004,11 @@ export function SettingsDialog({
                                   </div>
                                 </button>
                                 {isAmrAgent ? (
-                                  active && amrCardStatusReady ? (
+                                  // Fork: the cloud auth anchor renders only for
+                                  // already-signed-in users (console / sign-out).
+                                  // A signed-out user never sees a sign-up /
+                                  // log-in button or upgrade prompt here.
+                                  active && amrCardStatusReady && amrCardSignedIn ? (
                                     <span
                                       className={
                                         'amr-auth-anchor'
@@ -5087,72 +5016,17 @@ export function SettingsDialog({
                                       }
                                       onMouseEnter={() => setAmrCoachmarkDismissed(true)}
                                     >
-                                      {amrCoachmarkArmed &&
-                                      !amrCardSignedIn &&
-                                      !amrCoachmarkDismissed ? (
-                                        <span className="amr-coachmark" aria-hidden="true">
-                                          <span className="amr-coachmark__ring" />
-                                          <svg
-                                            className="amr-coachmark__cursor"
-                                            width="22"
-                                            height="22"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                          >
-                                            <path
-                                              d="M9.4 13V8a1.8 1.8 0 0 1 3.6 0v4.6c.35-.55 1-.95 1.75-.95.65 0 1.25.32 1.6.85.32-.5.9-.8 1.55-.8.8 0 1.5.5 1.78 1.2.35-.3.8-.5 1.3-.5 1.1 0 2 .9 2 2v3.05a5.6 5.6 0 0 1-5.6 5.6h-2.5a5 5 0 0 1-3.75-1.7l-4.2-4.75a1.85 1.85 0 0 1 2.65-2.6L9.4 16Z"
-                                              fill="#fff"
-                                              stroke="#1a1a1a"
-                                              strokeWidth="1.1"
-                                              strokeLinejoin="round"
-                                            />
-                                          </svg>
-                                        </span>
-                                      ) : null}
-                                      {amrCardCanUpgrade ? (
-                                        <button
-                                          type="button"
-                                          className="agent-card-amr-upgrade"
-                                          data-testid="settings-agent-card-amr-upgrade"
-                                          onClick={() => {
-                                            const upgradeUrl = amrUpgradeUrl(
-                                              amrCardStatus?.profile,
-                                            );
-                                            if (!upgradeUrl) return;
-                                            void openExternalUrl(
-                                              attributedAmrSettingsUrl(
-                                                upgradeUrl,
-                                                'settings_amr_upgrade',
-                                              ),
-                                            );
-                                          }}
-                                        >
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            viewBox="0 0 24 24"
-                                            fill="currentColor"
-                                            width={14}
-                                            height={14}
-                                            aria-hidden
-                                          >
-                                            <path d="M10.6144 17.7956 11.492 15.7854C12.2731 13.9966 13.6789 12.5726 15.4325 11.7942L17.8482 10.7219C18.6162 10.381 18.6162 9.26368 17.8482 8.92277L15.5079 7.88394C13.7092 7.08552 12.2782 5.60881 11.5105 3.75894L10.6215 1.61673C10.2916.821765 9.19319.821767 8.8633 1.61673L7.97427 3.75892C7.20657 5.60881 5.77553 7.08552 3.97685 7.88394L1.63658 8.92277C.868537 9.26368.868536 10.381 1.63658 10.7219L4.0523 11.7942C5.80589 12.5726 7.21171 13.9966 7.99275 15.7854L8.8704 17.7956C9.20776 18.5682 10.277 18.5682 10.6144 17.7956ZM19.4014 22.6899 19.6482 22.1242C20.0882 21.1156 20.8807 20.3125 21.8695 19.8732L22.6299 19.5353C23.0412 19.3526 23.0412 18.7549 22.6299 18.5722L21.9121 18.2532C20.8978 17.8026 20.0911 16.9698 19.6586 15.9269L19.4052 15.3156C19.2285 14.8896 18.6395 14.8896 18.4628 15.3156L18.2094 15.9269C17.777 16.9698 16.9703 17.8026 15.956 18.2532L15.2381 18.5722C14.8269 18.7549 14.8269 19.3526 15.2381 19.5353L15.9985 19.8732C16.9874 20.3125 17.7798 21.1156 18.2198 22.1242L18.4667 22.6899C18.6473 23.104 19.2207 23.104 19.4014 22.6899Z" />
-                                          </svg>
-                                          {t('settings.amrUpgrade')}
-                                        </button>
-                                      ) : null}
+                                      {/* Fork: no sign-in coachmark — no
+                                          third-party sign-up promotion. */}
+                                      {/* Fork: no paid-upgrade button — no
+                                          third-party cloud promotion. */}
                                       <AmrLoginPill
-                                        className={
-                                          'agent-card-amr-auth'
-                                          + (amrCardSignedIn
-                                            ? ''
-                                            : ' settings-cloud-signin-callout__button')
-                                        }
+                                        className="agent-card-amr-auth"
                                         hideSignedOutStatus
                                         hideSignedInStatus
                                         initialStatus={amrCardStatus}
                                         workspaceId={workspaceContext?.workspaceId}
                                         skipInitialRefresh
-                                        signInLabel={t('entry.cloudCreditsCta')}
                                         signInIcon="log-in"
                                         showConsoleAction={amrCardSignedIn}
                                         iconOnlySignOut
@@ -5657,30 +5531,8 @@ export function SettingsDialog({
                   {byokPreconditionNotice.message}
                 </p>
               ) : null}
-              {showProviderPreset ? (
-                <ByokProviderPicker
-                  label={t('settings.providerPreset')}
-                  customProviderLabel={t('settings.customProvider')}
-                  providers={protocolProviders}
-                  selectedProviderIndex={selectedProviderIndex}
-                  onCustomProviderSelect={() => {
-                    setApiModelCustomEditing(false);
-                    updateApiConfig({
-                      baseUrl: '',
-                      model: '',
-                      apiProviderBaseUrl: null,
-                    });
-                  }}
-                  onProviderSelect={(p) => {
-                    setApiModelCustomEditing(false);
-                    updateApiConfig({
-                      baseUrl: p.baseUrl,
-                      model: defaultKnownProviderModel(p),
-                      apiProviderBaseUrl: p.baseUrl,
-                    });
-                  }}
-                />
-              ) : null}
+              {/* Fork: no provider picker — the pasted key auto-detects its
+                  provider; the user never picks one by hand. */}
               <ByokKeyField
                 apiKey={cfg.apiKey}
                 apiKeyConsoleLink={apiKeyConsoleLink}
@@ -5734,48 +5586,28 @@ export function SettingsDialog({
                   })}
                 </p>
               ) : null}
-              {showBaseUrlField ? (
-                <ByokProviderBaseUrl
-                  apiProtocol={apiProtocol}
-                  inputRef={baseUrlInputRef}
-                  baseUrl={cfg.baseUrl}
-                  baseUrlError={baseUrlErrorMessage}
-                  baseUrlInvalid={Boolean(baseUrlErrorMessage)}
-                  baseUrlPlaceholder={baseUrlPlaceholder}
-                  baseUrlReadOnly={baseUrlReadOnly}
-                  labels={{
-                    baseUrl: t('settings.baseUrl'),
-                    required: t('settings.required'),
-                    customize: t('settings.baseUrlCustomize'),
-                    invalid: t('settings.baseUrlInvalid'),
-                    defaultHint: t('settings.baseUrlDefaultHint'),
-                    azureHint: t('settings.azureBaseUrlHint'),
-                  }}
-                  onBlur={commitProviderModelsInputs}
-                  onChange={(value) =>
-                    updateApiConfig({
-                      baseUrl: value,
-                      apiProviderBaseUrl: apiProtocol === 'azure' ? '' : null,
-                    })
-                  }
-                  onCustomize={() => {
-                    updateApiConfig({ apiProviderBaseUrl: null });
-                    window.setTimeout(() => baseUrlInputRef.current?.focus(), 0);
-                  }}
-                  onFocus={() => {
-                    const byokProviderId = byokProtocolToTracking(apiProtocol);
-                    if (byokProviderId) {
-                      trackSettingsByokFieldClick(analytics.track, {
-                        page_name: 'settings',
-                        area: 'configure_execution_mode_byok',
-                        element: 'base_url',
-                        provider_id: byokProviderId,
-                        has_value: Boolean(cfg.baseUrl?.trim()),
-                      });
-                    }
-                  }}
-                />
+              {selectedByokProvider && cfg.model.trim() ? (
+                <p className="hint" role="status">
+                  {t('settings.byokDetectedSummary', {
+                    provider: selectedByokProvider.title,
+                    model: cfg.model.trim(),
+                  })}
+                </p>
               ) : null}
+              <button
+                type="button"
+                className="ghost settings-test-btn"
+                onClick={() => {
+                  const localPreset = byokProviderOptions.find(
+                    (provider) => provider.id === 'llama-server',
+                  );
+                  if (localPreset) setByokProvider(localPreset);
+                }}
+              >
+                {t('settings.byokUseLocal')}
+              </button>
+              {/* Fork: no base-URL field — the pasted key auto-detects its
+                  provider and base URL; there is nothing to type here. */}
               <label className="field">
                 <span className="field-label">{t('settings.maxTokens')}</span>
                 <input
@@ -5790,84 +5622,9 @@ export function SettingsDialog({
                 />
                 <p className="hint">{t('settings.maxTokensHint')}</p>
               </label>
-              <ByokModelField
-                customActive={apiModelCustomActive}
-                customInputRef={customModelInputRef}
-                labels={{
-                  customModel: t('settings.modelCustom'),
-                  customModelLabel: apiProtocol === 'azure'
-                    ? t('settings.azureCustomDeploymentName')
-                    : t('settings.modelCustomLabel'),
-                  customModelPlaceholder: apiProtocol === 'azure'
-                    ? t('settings.azureDeploymentModel')
-                    : t('settings.modelCustomPlaceholder'),
-                  fetchModelsUnsupported: t('settings.fetchModelsUnsupported'),
-                  model: apiProtocol === 'azure'
-                    ? t('settings.azureDeploymentModel')
-                    : t('settings.model'),
-                  required: t('settings.required'),
-                  searchPlaceholder: t('designs.searchPlaceholder'),
-                  suggestedModelsHint: t('settings.suggestedModelsHint'),
-                }}
-                model={cfg.model}
-                modelSelectRef={modelSelectRef}
-                models={apiModelOptions.map((m) => ({
-                  ...m,
-                  label: apiModelOptionLabel(
-                    m,
-                    !hidesAccountModelSourceLabel(apiProtocol) &&
-                    loadedAccountModelCount > 0
-                      ? fetchedApiModelIds.has(m.id)
-                        ? t('settings.modelSourceAccount')
-                        : t('settings.modelSourceSuggested')
-                      : undefined,
-                  ),
-                }))}
-                modelsLoadedFromAccountMessage={
-                  loadedAccountModelCount > 0
-                    ? t(
-                        hidesAccountModelSourceLabel(apiProtocol)
-                          ? 'settings.modelsLoadedCount'
-                          : 'settings.modelsLoadedFromAccount',
-                        {
-                          count: loadedAccountModelCount,
-                        },
-                      )
-                    : null
-                }
-                providerModelsFailureMessage={providerModelsFailureMessage}
-                forceTextInput={apiProtocol === 'azure'}
-                showAzureModelFetchHint={apiProtocol === 'azure'}
-                showFetchModelsUnsupportedHint={
-                  apiProtocol !== 'azure' &&
-                  isProviderModelDiscoveryUnsupported(apiProtocol, cfg.baseUrl)
-                }
-                showSuggestedModelsHint={apiProtocol !== 'azure' && !selectedProvider}
-                azureModelFetchHint={t('settings.azureModelFetchHint')}
-                onCustomModelChange={(value) => updateApiConfig({ model: value })}
-                onCustomModelSelect={() => {
-                  apiModelUserSelectedRef.current = true;
-                  setApiModelCustomEditing(true);
-                  updateApiConfig({ model: '' });
-                }}
-                onFocus={() => {
-                  const byokProviderId = byokProtocolToTracking(apiProtocol);
-                  if (byokProviderId) {
-                    trackSettingsByokFieldClick(analytics.track, {
-                      page_name: 'settings',
-                      area: 'configure_execution_mode_byok',
-                      element: 'model',
-                      provider_id: byokProviderId,
-                      has_value: Boolean(cfg.model?.trim()),
-                    });
-                  }
-                }}
-                onModelSelect={(nextValue) => {
-                  apiModelUserSelectedRef.current = true;
-                  setApiModelCustomEditing(false);
-                  updateApiConfig({ model: nextValue });
-                }}
-              />
+              {/* Fork: no model picker — the pasted key auto-detects its
+                  provider's free model; the read-only summary above shows
+                  what was detected. */}
               {isLocalOllamaBaseUrl(cfg.baseUrl) ? (
                 <p className="hint">{t('settings.localModelNote')}</p>
               ) : null}

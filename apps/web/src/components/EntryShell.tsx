@@ -105,7 +105,6 @@ import {
   ProjectSearchModal,
 } from './ProjectSearchModal';
 import {
-  CloudSignInTip,
   RailAccountRecoveryTip,
   RailAccountSyncTip,
 } from './CloudSignInTip';
@@ -221,11 +220,9 @@ import {
 import { TasksView } from './TasksView';
 import {
   API_KEY_PLACEHOLDERS,
-  API_PROTOCOL_TABS,
   SUGGESTED_MODELS_BY_PROTOCOL,
 } from '../state/apiProtocols';
-import { defaultKnownProviderModel, KNOWN_PROVIDERS } from '../state/config';
-import type { KnownProvider } from '../state/config';
+import { KNOWN_PROVIDERS } from '../state/config';
 import { testAgent, testApiProvider } from '../providers/connection-test';
 import { fetchProviderModels } from '../providers/provider-models';
 import { invalidateProjectFilesCache } from '../providers/registry';
@@ -258,7 +255,8 @@ import {
   RAIL_OPEN_STORAGE_KEY,
   readStoredRailOpen,
 } from './entryRailBridge';
-import { resolveByokModelPreference } from './byok/validation';
+import { cleanByokApiKey, resolveByokModelPreference } from './byok/validation';
+import { detectProviderFromApiKey } from '@open-design/contracts/api/providerKeyDetection';
 import { isLocalBaseUrl } from '../utils/byokProvider';
 import onboardingWelcomeStyles from './OnboardingWelcome.module.css';
 import { AmrActivationHintText } from './AmrActivationHintText';
@@ -756,9 +754,9 @@ export function EntryShell({
     accountFooterNotice = <RailAccountSyncTip />;
   } else if (accountFooterState === 'recovering') {
     accountFooterNotice = <RailAccountRecoveryTip />;
-  } else if (accountFooterState === 'sign-in') {
-    accountFooterNotice = <CloudSignInTip />;
   }
+  // Fork: no CloudSignInTip in the 'sign-in' footer state — no third-party
+  // sign-up / free-credit promotion anywhere in the app.
   const workspaceContextRef = useRef(workspaceContext);
   workspaceContextRef.current = workspaceContext;
   const workspaceContextStateRef = useRef(workspaceContextState);
@@ -3108,6 +3106,67 @@ function OnboardingView({
     void onConfigPersist(nextConfig);
   }
 
+  // Fork: key-only onboarding — a pasted key carries its provider. On blur,
+  // detect it and fill provider + base URL + free model, so the user never
+  // picks a provider, base URL, or model by hand. The protocol switch is
+  // async (App state), so a cross-protocol detection is held in a ref and
+  // applied by the effect below once the new protocol has landed; applying
+  // the patch in the same tick would clobber the switch with the stale
+  // protocol from this render's config.
+  const pendingByokDetectionRef = useRef<{
+    apiKey: string;
+    protocol: ApiProtocol;
+    baseUrl: string;
+    model: string;
+  } | null>(null);
+
+  const handleByokKeyCommit = (): void => {
+    const cleanedApiKey = cleanByokApiKey(config.apiKey);
+    const detection = detectProviderFromApiKey(cleanedApiKey);
+    if (!detection) return;
+    const currentProtocol = config.apiProtocol ?? 'anthropic';
+    if (detection.protocol !== currentProtocol) {
+      pendingByokDetectionRef.current = {
+        apiKey: cleanedApiKey,
+        protocol: detection.protocol,
+        baseUrl: detection.baseUrl,
+        model: detection.freeModel,
+      };
+      onApiProtocolChange(detection.protocol);
+      return;
+    }
+    updateApiConfig({
+      apiKey: cleanedApiKey,
+      baseUrl: detection.baseUrl,
+      model: detection.freeModel,
+      apiProviderBaseUrl: detection.baseUrl,
+    });
+  };
+
+  useEffect(() => {
+    const pending = pendingByokDetectionRef.current;
+    if (!pending) return;
+    if ((config.apiProtocol ?? 'anthropic') !== pending.protocol) return;
+    pendingByokDetectionRef.current = null;
+    updateApiConfig({
+      apiKey: pending.apiKey,
+      baseUrl: pending.baseUrl,
+      model: pending.model,
+      apiProviderBaseUrl: pending.baseUrl,
+    });
+    // Runs only to apply a pending key detection after its protocol switch
+    // lands; the ref guard makes every other config change a no-op.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.apiProtocol]);
+
+  const byokDetectedSummary =
+    selectedProvider || config.model.trim()
+      ? {
+          providerLabel: selectedProvider?.label ?? apiProtocol,
+          model: config.model.trim(),
+        }
+      : null;
+
   function selectPreferredProviderModelWhenEmpty(
     models: readonly ProviderModelOption[],
     expectedInputKey: string,
@@ -3267,6 +3326,13 @@ function OnboardingView({
     });
     clearOnboardingSessionId();
     onFinish();
+  }
+
+  // Fork: no key gate — home opens without any key or cloud sign-in. Key
+  // entry is optional, later, from Settings. 'none' is a valid
+  // TrackingRuntimeType: onboarding completes with no runtime.
+  function handleSkipOnboarding(): void {
+    completeStreamlinedOnboarding('none');
   }
 
   function continueAfterCloudSignIn(): void {
@@ -4070,99 +4136,13 @@ function OnboardingView({
             <h1 className="onboarding-cloud__title">{t('settings.onboardingCloudTitle')}</h1>
             <p className="onboarding-cloud__body">{t('settings.onboardingCloudBody')}</p>
             <div className={onboardingWelcomeStyles.signInAction}>
-              {!amrSignedIn && !amrStatusResolving && !cloudBusy ? (
-                <span className={onboardingWelcomeStyles.creditCorner}>
-                  <span
-                    className={`${onboardingWelcomeStyles.credits} od-tooltip`}
-                    data-tooltip={t('settings.onboardingFreeCreditsHint')}
-                    aria-label={t('settings.onboardingFreeCreditsHint')}
-                    tabIndex={0}
-                  >
-                    <span className={onboardingWelcomeStyles.creditLabel}>
-                      {t('settings.onboardingFreeCredits')}
-                    </span>
-                  </span>
-                </span>
-              ) : null}
               <button
                 type="button"
                 className="onboarding-cloud__primary"
-                onClick={() => {
-                  if (amrStatusResolving) return;
-                  if (amrLoginError) {
-                    void retryCloudSignIn();
-                    return;
-                  }
-                  if (amrSignedIn) {
-                    recordAmrEntry(analytics.track, 'onboarding_amr_card', new Date(), {
-                      metricsConsent: config.telemetry?.metrics === true,
-                    });
-                    recordAmrEntry(
-                      analytics.track,
-                      'onboarding_amr_sign_in_continue',
-                      new Date(),
-                      {
-                        metricsConsent: config.telemetry?.metrics === true,
-                        reuseExistingFrom: ['onboarding_amr_card'],
-                      },
-                    );
-                    continueAfterCloudSignIn();
-                    return;
-                  }
-                  void handleCloudSignIn();
-                }}
-                disabled={cloudBusy || amrLoginPending || amrLoginCancelPending || amrStatusResolving}
-                aria-busy={cloudBusy || amrStatusResolving ? true : undefined}
+                onClick={handleSkipOnboarding}
               >
-                <Icon name="log-in" size={17} />
-                <span>
-                  {amrStatusResolving
-                      ? t('common.loading')
-                      : cloudBusy
-                        ? t('settings.amrSigningIn')
-                        : amrSignedIn
-                        ? t('settings.onboardingCloudContinue')
-                        : t('settings.onboardingCloudSignIn')}
-                </span>
+                <span>{t('settings.onboardingSkip')}</span>
               </button>
-              {activationHintVisible ? (
-                <p className={onboardingWelcomeStyles.activationHint}>
-                  <span>
-                    {amrStatus?.browserOpenFailed ? (
-                      <AmrActivationHintText browserOpenFailed />
-                    ) : (
-                      t('settings.onboardingActivationPrompt')
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className={onboardingWelcomeStyles.reopen}
-                    onClick={() => void reopenCloudSignIn()}
-                  >
-                    <span>{t('settings.onboardingActivationReopen')}</span>
-                    <Icon name="external-link" size={13} />
-                  </button>
-                </p>
-              ) : null}
-              {amrLoginError ? (
-                <p
-                  role="alert"
-                  className={`onboarding-cloud__error ${onboardingWelcomeStyles.loginError}`}
-                  data-testid="onboarding-login-status"
-                >
-                  {t('settings.amrLoginErrorCompact')}
-                </p>
-              ) : null}
-              {cloudBusy ? (
-                <button
-                  type="button"
-                  className={onboardingWelcomeStyles.cancel}
-                  onClick={handleCancelAmrLogin}
-                  disabled={amrLoginCancelPending}
-                >
-                  {t('settings.amrCancelSignIn')}
-                </button>
-              ) : null}
             </div>
             {cloudBusy ? null : (
               <div className={onboardingWelcomeStyles.belowAction}>
@@ -4285,41 +4265,14 @@ function OnboardingView({
                 <OnboardingByokSetupPanel
                   apiProtocol={apiProtocol}
                   apiKey={config.apiKey}
-                  baseUrl={config.baseUrl}
-                  model={config.model}
-                  selectedProvider={selectedProvider}
-                  providerOptions={byokProviderOptions}
                   apiKeyVisible={apiKeyVisible}
                   onToggleApiKey={() => setApiKeyVisible((current) => !current)}
-                  onProtocolChange={onApiProtocolChange}
-                  onProviderChange={(baseUrl) => {
-                    const provider = KNOWN_PROVIDERS.find(
-                      (item) => item.protocol === apiProtocol && item.baseUrl === baseUrl,
-                    );
-                    updateApiConfig({
-                      baseUrl: provider?.baseUrl ?? '',
-                      model: defaultKnownProviderModel(provider),
-                      apiProviderBaseUrl: provider?.baseUrl ?? null,
-                    });
-                  }}
                   onApiKeyChange={(apiKey) => updateApiConfig({ apiKey })}
-                  onModelChange={(model) => {
-                    onApiModelChange(model);
-                    updateApiConfig({ model });
-                  }}
-                  onBaseUrlChange={(baseUrl) =>
-                    updateApiConfig({
-                      baseUrl,
-                      apiProviderBaseUrl: apiProtocol === 'azure' ? '' : null,
-                    })
-                  }
-                  modelOptions={byokModelOptions}
+                  onApiKeyCommit={handleByokKeyCommit}
+                  detectedSummary={byokDetectedSummary}
                   testState={visibleProviderTestState}
                   canTest={canTestProvider}
                   onTest={() => void testProviderInline()}
-                  modelsState={visibleProviderModelsState}
-                  canFetchModels={canFetchProviderModels}
-                  onFetchModels={() => void fetchProviderModelsInline()}
                 />
               ) : null}
             </div>
@@ -4342,6 +4295,14 @@ function OnboardingView({
             >
               {continuePending ? <Icon name="spinner" size={15} className="icon-spin" /> : null}
               <span>{continuePending ? t('settings.testRunning') : primaryActionLabel}</span>
+            </button>
+            <button
+              type="button"
+              className="ghost settings-test-btn"
+              onClick={handleSkipOnboarding}
+              disabled={continuePending}
+            >
+              {t('settings.onboardingSkip')}
             </button>
           </div>
         </div>
@@ -4498,56 +4459,31 @@ function OnboardingCliSetupPanel({
 function OnboardingByokSetupPanel({
   apiProtocol,
   apiKey,
-  baseUrl,
-  model,
-  selectedProvider,
-  providerOptions,
   apiKeyVisible,
   onToggleApiKey,
-  onProtocolChange,
-  onProviderChange,
   onApiKeyChange,
-  onModelChange,
-  onBaseUrlChange,
-  modelOptions,
+  onApiKeyCommit,
+  detectedSummary,
   testState,
   canTest,
   onTest,
-  modelsState,
-  canFetchModels,
-  onFetchModels,
 }: {
   apiProtocol: ApiProtocol;
   apiKey: string;
-  baseUrl: string;
-  model: string;
-  selectedProvider: KnownProvider | null;
-  providerOptions: Array<{ value: string; label: string }>;
-  modelOptions: Array<{ value: string; label: string }>;
   apiKeyVisible: boolean;
   onToggleApiKey: () => void;
-  onProtocolChange: (protocol: ApiProtocol) => void;
-  onProviderChange: (baseUrl: string) => void;
   onApiKeyChange: (apiKey: string) => void;
-  onModelChange: (model: string) => void;
-  onBaseUrlChange: (baseUrl: string) => void;
+  onApiKeyCommit: () => void;
+  detectedSummary: { providerLabel: string; model: string } | null;
   testState:
     | { status: 'idle' }
     | { status: 'running'; inputKey: string }
     | { status: 'done'; inputKey: string; result: ConnectionTestResponse };
   canTest: boolean;
   onTest: () => void;
-  modelsState:
-    | { status: 'idle' }
-    | { status: 'running'; inputKey: string }
-    | { status: 'done'; inputKey: string; result: ProviderModelsResponse };
-  canFetchModels: boolean;
-  onFetchModels: () => void;
 }) {
   const t = useT();
   const running = testState.status === 'running';
-  const fetchingModels = modelsState.status === 'running';
-  const useDeploymentInput = apiProtocol === 'azure';
   return (
     <div className="onboarding-view__setup-panel">
       <div className="onboarding-view__setup-head">
@@ -4556,15 +4492,6 @@ function OnboardingByokSetupPanel({
           <p>{t('settings.modeApi')}</p>
         </div>
         <div className="onboarding-view__setup-head-actions">
-          <button
-            type="button"
-            className={`onboarding-view__mini-button${fetchingModels ? ' is-loading' : ''}`}
-            onClick={onFetchModels}
-            disabled={fetchingModels || !canFetchModels}
-            title={t('settings.fetchModelsTitle')}
-          >
-            {fetchingModels ? t('settings.fetchModelsRunning') : t('settings.fetchModels')}
-          </button>
           <button
             type="button"
             className={`onboarding-view__mini-button${running ? ' is-loading' : ''}`}
@@ -4576,34 +4503,6 @@ function OnboardingByokSetupPanel({
           </button>
         </div>
       </div>
-      <div
-        className="onboarding-view__protocol-strip"
-        role="tablist"
-        aria-label={t('settings.protocolAria')}
-      >
-        {API_PROTOCOL_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={apiProtocol === tab.id}
-            className={apiProtocol === tab.id ? 'is-selected' : ''}
-            onClick={() => onProtocolChange(tab.id)}
-          >
-            {tab.title}
-          </button>
-        ))}
-      </div>
-      <OnboardingDropdown
-        label={t('settings.quickFillProvider')}
-        placeholder={t('settings.customProvider')}
-        value={selectedProvider?.baseUrl ?? ''}
-        options={providerOptions}
-        onChange={onProviderChange}
-        allowEmptyValue={apiProtocol === 'azure'}
-        searchable
-        searchPlaceholder={t('settings.quickFillProvider')}
-      />
       <label className="onboarding-view__inline-field">
         <span>{t('settings.apiKey')}</span>
         <span className="onboarding-view__field-row">
@@ -4612,67 +4511,19 @@ function OnboardingByokSetupPanel({
             placeholder={API_KEY_PLACEHOLDERS[apiProtocol]}
             value={apiKey}
             onChange={(event) => onApiKeyChange(event.target.value)}
+            onBlur={onApiKeyCommit}
           />
           <button type="button" onClick={onToggleApiKey}>
             {apiKeyVisible ? t('settings.hide') : t('settings.show')}
           </button>
         </span>
       </label>
-      <div className="onboarding-view__compact-fields">
-        <label className="onboarding-view__inline-field">
-          <span>{t('settings.baseUrl')}</span>
-          <input
-            type="url"
-            inputMode="url"
-            value={baseUrl}
-            placeholder={selectedProvider?.baseUrl ?? 'https://api.anthropic.com'}
-            onChange={(event) => onBaseUrlChange(event.target.value)}
-          />
-        </label>
-        {modelOptions.length > 0 && !useDeploymentInput ? (
-          <OnboardingDropdown
-            label={t('settings.model')}
-            placeholder={defaultKnownProviderModel(selectedProvider) || 'claude-sonnet-4-5'}
-            value={model}
-            options={modelOptions}
-            onChange={onModelChange}
-            placement="top"
-            searchable
-            searchPlaceholder={t('newproj.modelSearch')}
-            allowCustomValue
-          />
-        ) : (
-          <label className="onboarding-view__inline-field">
-            <span>
-              {useDeploymentInput
-                ? t('settings.azureDeploymentModel')
-                : t('settings.model')}
-            </span>
-            <input
-              type="text"
-              value={model}
-              placeholder={
-                useDeploymentInput
-                  ? t('settings.azureDeploymentModel')
-                  : defaultKnownProviderModel(selectedProvider) || 'claude-sonnet-4-5'
-              }
-              onChange={(event) => onModelChange(event.target.value.trim())}
-            />
-          </label>
-        )}
-      </div>
-      {modelsState.status === 'running' ? (
-        <p className="onboarding-view__test-status is-running" role="status">
-          {t('settings.fetchModelsRunning')}
-        </p>
-      ) : modelsState.status === 'done' ? (
-        <p
-          className={`onboarding-view__test-status is-${onboardingProviderModelsVariant(
-            modelsState.result,
-          )}`}
-          role={modelsState.result.ok ? 'status' : 'alert'}
-        >
-          {renderOnboardingProviderModelsMessage(t, modelsState.result)}
+      {detectedSummary ? (
+        <p className="onboarding-view__detected-summary" role="status">
+          {t('settings.byokDetectedSummary', {
+            provider: detectedSummary.providerLabel,
+            model: detectedSummary.model,
+          })}
         </p>
       ) : null}
       {testState.status === 'running' ? (
@@ -4686,7 +4537,7 @@ function OnboardingByokSetupPanel({
           )}`}
           role={testState.result.ok ? 'status' : 'alert'}
         >
-          {renderOnboardingProviderTestMessage(t, testState.result, model)}
+          {renderOnboardingProviderTestMessage(t, testState.result, detectedSummary?.model ?? '')}
         </p>
       ) : null}
     </div>
