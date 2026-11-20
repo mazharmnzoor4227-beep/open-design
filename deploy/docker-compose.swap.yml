@@ -28,6 +28,10 @@ services:
       - /tmp
       - /home/open-design:uid=1001,gid=1001
     cpus: "1.5"
+    # Fork: upstream defaults the container to 384m — an opencode run
+    # (byok-opencode / Local) needs ~240MB+ at startup alone and the kernel
+    # OOM-killed it (SIGKILL, run c5742360, 2026-11-20). Host has 12GB.
+    mem_limit: "2g"
 
 volumes:
   open-design_open_design_data:
