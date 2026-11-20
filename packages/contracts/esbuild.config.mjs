@@ -13,6 +13,8 @@ await build({
     "./src/api/finalize.ts",
     "./src/api/handoff.ts",
     "./src/api/providerModels.ts",
+    "./src/api/providerKeyDetection.ts",
+    "./src/api/antigravityAccounts.ts",
     "./src/api/reasoningExecution.ts",
     "./src/api/research.ts",
     "./src/api/touchpointOffline.ts",

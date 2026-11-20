@@ -99,6 +99,11 @@ import {
   BYOK_OPENCODE_PROVIDER_ID,
   buildOpenCodeByokProviderConfig,
 } from './runtimes/byok-opencode.js';
+import {
+  antigravityAccountHomeDir,
+  antigravityAccountSettingsPath,
+  resolveAntigravityAccountForRun,
+} from './services/antigravity-accounts.js';
 
 export { validateBaseUrl } from '@open-design/contracts/api/connectionTest';
 
@@ -875,7 +880,18 @@ export function redactSecrets(
 }
 
 type ProviderConnectionInput = ProviderTestRequest & { signal?: AbortSignal };
-type AgentConnectionInput = AgentTestRequest & { signal?: AbortSignal };
+type AgentConnectionInput = AgentTestRequest & {
+  signal?: AbortSignal;
+  /**
+   * Daemon data root (RUNTIME_DATA_DIR). When set and the agent is
+   * antigravity, the test runs under the active Antigravity account's
+   * credential home instead of the daemon HOME, so Settings → Test
+   * exercises the same login a chat run would use. Omitted by callers
+   * that don't know the data dir (unit tests) — then the test falls
+   * back to stock single-login behaviour.
+   */
+  dataDir?: string;
+};
 
 function appendVersionedApiPath(baseUrl: string, suffix: string): string {
   const url = new URL(baseUrl);
@@ -2371,6 +2387,21 @@ async function testAgentConnectionInternal(
     def.id === 'antigravity'
       ? path.join(tempDir, 'agy-connection-test.log')
       : null;
+  // Multi-account Antigravity: test the ACTIVE account's login, not the
+  // daemon HOME's. Resolved here — after the binary check above, so a
+  // missing agy still fails fast without moving the rotation pointer.
+  const antigravityAccount =
+    def.id === 'antigravity' && input.dataDir
+      ? resolveAntigravityAccountForRun(input.dataDir)
+      : null;
+  const antigravityAccountHome =
+    antigravityAccount && input.dataDir
+      ? antigravityAccountHomeDir(input.dataDir, antigravityAccount.id)
+      : null;
+  const antigravityAccountSettings =
+    antigravityAccount && input.dataDir
+      ? antigravityAccountSettingsPath(input.dataDir, antigravityAccount.id)
+      : null;
   let child: AgentChild | null = null;
   let childExit: Promise<AgentChildExit> | null = null;
   let childClosed = false;
@@ -2604,6 +2635,9 @@ async function testAgentConnectionInternal(
           ...(antigravityLogFilePath
             ? { agentLogFilePath: antigravityLogFilePath }
             : {}),
+          ...(antigravityAccountSettings
+            ? { antigravitySettingsPath: antigravityAccountSettings }
+            : {}),
         },
       );
       // Connection tests should validate the adapter's core CLI path, not
@@ -2660,6 +2694,9 @@ async function testAgentConnectionInternal(
     const env = applyAgentLaunchEnv({
       ...baseEnv,
       ...(mmdRouteLaunchEnv || {}),
+      // Multi-account Antigravity: the smoke spawn reads the active
+      // account's OAuth login from its credential home.
+      ...(antigravityAccountHome ? { HOME: antigravityAccountHome } : {}),
     }, executableResolution);
     model = await resolveConnectionTestModelForAgent(
       def,

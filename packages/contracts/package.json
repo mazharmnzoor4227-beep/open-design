@@ -38,6 +38,14 @@
       "types": "./dist/api/providerModels.d.ts",
       "default": "./dist/api/providerModels.mjs"
     },
+    "./api/providerKeyDetection": {
+      "types": "./dist/api/providerKeyDetection.d.ts",
+      "default": "./dist/api/providerKeyDetection.mjs"
+    },
+    "./api/antigravityAccounts": {
+      "types": "./dist/api/antigravityAccounts.d.ts",
+      "default": "./dist/api/antigravityAccounts.mjs"
+    },
     "./api/reasoningExecution": {
       "types": "./dist/api/reasoningExecution.d.ts",
       "default": "./dist/api/reasoningExecution.mjs"

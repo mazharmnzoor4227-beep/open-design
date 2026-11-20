@@ -33,6 +33,7 @@ import {
 } from '../integrations/aihubmix.js';
 import { isSafeId as isSafeProjectId } from '../projects.js';
 import { projectKindToTracking } from '@open-design/contracts/analytics';
+import { detectProviderResponse } from '@open-design/contracts/api/providerKeyDetection';
 import { proxyDispatcherRequestInit, validateUserProviderBaseUrl } from '../connectionTest.js';
 import { isKnownReasoningEffort, resolveModelForServiceTier } from '../runtimes/models.js';
 import { googleStreamGenerateContentUrl } from '../integrations/google-models.js';
@@ -270,6 +271,19 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     }
   });
 
+  // Pure key-format → provider detection (no network, no key echo). The web
+  // BYOK form runs the same check locally on paste; this endpoint exists so
+  // the `od provider detect` CLI and any external agent can ask the daemon
+  // instead of reimplementing the prefix table. The key is never returned
+  // or logged — only the detected provider, base URL and free model.
+  app.post('/api/provider/detect', (req, res) => {
+    const body = req.body || {};
+    if (typeof body.apiKey !== 'string') {
+      return sendApiError(res, 400, 'BAD_REQUEST', 'apiKey is required');
+    }
+    return res.json(detectProviderResponse(body.apiKey));
+  });
+
   app.post('/api/test/connection', async (req, res) => {
     const controller = new AbortController();
     const abortIfRequestAborted = () => {
@@ -401,6 +415,9 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
                 ? body.agentCliEnv
                 : undefined,
             signal: controller.signal,
+            // Lets the Antigravity smoke test run under the active
+            // multi-account credential home instead of the daemon HOME.
+            dataDir: ctx.paths.RUNTIME_DATA_DIR,
           });
           return res.json(result);
         } catch (err: any) {

@@ -1,5 +1,6 @@
 import type { ServerContext } from './server-context.js';
 import type { RegisterActiveContextRoutesDeps } from './routes/active-context.js';
+import type { RegisterAntigravityAccountsRoutesDeps } from './routes/antigravity-accounts.js';
 import type { RegisterAutomationRoutesDeps } from './routes/automation.js';
 import type { RegisterChatRoutesDeps } from './routes/chat.js';
 import type { RegisterDeployRoutesDeps, RegisterDeploymentCheckRoutesDeps } from './routes/deploy.js';
@@ -23,6 +24,7 @@ import type { RegisterXaiRoutesDeps } from './routes/xai.js';
 
 type AllRegisteredRouteDeps =
   & RegisterActiveContextRoutesDeps
+  & RegisterAntigravityAccountsRoutesDeps
   & RegisterAutomationRoutesDeps
   & RegisterChatRoutesDeps
   & RegisterDeployRoutesDeps

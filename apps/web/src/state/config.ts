@@ -237,6 +237,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     protocol: 'google',
     baseUrl: 'https://generativelanguage.googleapis.com',
     preferredModels: [
+      'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-3.1-pro-preview',
       'gemini-3-flash-preview',
@@ -370,6 +371,21 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     protocol: 'openai',
     baseUrl: 'http://127.0.0.1:8000/v1',
     preferredModels: ['model', 'llama3', 'qwen3'],
+    requiresApiKey: false,
+  },
+  {
+    // Local llama-server (e.g. llama.cpp server on this machine or the
+    // user's own server). No API key needed — the daemon talks to it
+    // directly over the loopback OpenAI-compatible endpoint. The model is
+    // whatever the server currently serves; the fetch step replaces the
+    // LFM3-1.7B default with the server's actual model id when it differs.
+    // Honest limit, also shown under the model field: small local models
+    // cannot match a Pro model's clone quality — use a 7B+ model for
+    // decent clones.
+    label: 'Local llama-server',
+    protocol: 'openai',
+    baseUrl: 'http://127.0.0.1:8081/v1',
+    preferredModels: ['LFM3-1.7B'],
     requiresApiKey: false,
   },
   {
@@ -550,6 +566,7 @@ const BYOK_PROVIDER_PRESET_SPECS = [
   { id: 'volcengine', title: 'Volcengine Ark', providerLabel: 'Volcengine Ark' },
   { id: 'qianfan', title: 'Baidu Qianfan', providerLabel: 'Baidu Qianfan' },
   { id: 'vllm', title: 'vLLM', providerLabel: 'vLLM' },
+  { id: 'llama-server', title: 'Local llama-server', providerLabel: 'Local llama-server' },
   { id: 'mimo', title: 'Xiaomi MiMo', providerLabel: 'MiMo (Xiaomi) — OpenAI' },
   { id: 'minimax', title: 'MiniMax', providerLabel: 'MiniMax — Anthropic (CN)' },
   { id: 'moonshot', title: 'Moonshot', providerLabel: 'Moonshot' },

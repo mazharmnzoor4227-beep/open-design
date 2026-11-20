@@ -314,6 +314,15 @@ const AUTOMATION_STRING_FLAGS = new Set([
 const AUTOMATION_BOOLEAN_FLAGS = new Set([
   'help', 'h', 'json', 'disabled', 'enabled',
 ]);
+// `od provider detect` asks the daemon which provider a pasted API key
+// belongs to (same prefix table the web BYOK form uses on paste). The
+// key comes from --api-key or stdin so it never lands in shell history.
+const PROVIDER_STRING_FLAGS = new Set(['daemon-url', 'api-key']);
+const PROVIDER_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
+// `od antigravity accounts …` manages the connected Antigravity
+// accounts (one agy login per account home; runs rotate on quota).
+const ANTIGRAVITY_STRING_FLAGS = new Set(['daemon-url', 'label']);
+const ANTIGRAVITY_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const MEMORY_STRING_FLAGS = new Set([
   'daemon-url', 'name', 'description', 'type', 'body', 'body-file',
   // `od memory profile set` reads structured fields verbatim and/or a prose
@@ -428,6 +437,8 @@ const SUBCOMMAND_MAP = {
   workspace: runWorkspace,
   automation: runAutomation,
   automations: runAutomation,
+  provider: runProvider,
+  antigravity: runAntigravity,
   memory: runMemory,
   run: runRun,
   files: runFiles,
@@ -1213,6 +1224,19 @@ function printRootHelp() {
       Automations tab, so an external agent (hermes, openclaw, ...) can
       schedule, trigger, or harvest results from a routine without
       opening the web UI.
+
+  od provider detect [--api-key <key>] [--json]
+      Detect which provider a pasted API key belongs to (Gemini,
+      Anthropic, OpenAI, OpenRouter, xAI) and print its base URL and
+      free model. The key comes from --api-key or stdin so it never
+      lands in shell history. Same prefix table the web BYOK form
+      uses on paste.
+
+  od antigravity accounts <list|add|activate|remove|clear-quota> [args]
+      Manage the connected Antigravity accounts. Each account keeps its
+      own agy login in its own credential home; runs rotate to the next
+      account when one hits its quota. Sign a new account in with the
+      HOME=… agy command the add step prints.
 
   od message-center <list|read|read-all> [args]
       Read and acknowledge message-center inbox items through the same
@@ -12321,6 +12345,214 @@ Output:
 
 Common options:
   --daemon-url <url>   OpenDesign daemon HTTP base.`);
+}
+
+function printProviderHelp() {
+  console.log(`Usage:
+  od provider detect [--api-key <key>] [--json]
+      Detect which provider a pasted API key belongs to and print its
+      base URL and free model. The key comes from --api-key or stdin
+      (pipe it) so it never lands in shell history. Same prefix table
+      the web BYOK form uses on paste: AIza… → Google Gemini,
+      sk-ant-… → Anthropic, sk-or-… → OpenRouter, xai-… → xAI,
+      sk-… → OpenAI.
+`);
+}
+
+function printAntigravityHelp() {
+  console.log(`Usage:
+  od antigravity accounts list [--json]
+      List the connected Antigravity accounts (active + quota flags).
+  od antigravity accounts add --label "Account 1" [--json]
+      Connect another Antigravity account. Prints the HOME=… agy
+      sign-in command — run it in a terminal and complete the Google
+      sign-in in your browser; the login is stored in that account's
+      own credential home.
+  od antigravity accounts activate <id> [--json]
+      Switch the active account (no re-login needed).
+  od antigravity accounts remove <id> [--json]
+      Remove an account and delete its stored login.
+  od antigravity accounts clear-quota <id> [--json]
+      Clear a quota-exhausted flag by hand (it auto-expires in 24h).
+`);
+}
+
+async function runProvider(args) {
+  if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
+    printProviderHelp();
+    process.exit(args.length === 0 ? 2 : 0);
+  }
+  const sub = args[0];
+  const rest = args.slice(1);
+  let flags;
+  try {
+    flags = parseFlags(rest, {
+      string: PROVIDER_STRING_FLAGS,
+      boolean: PROVIDER_BOOLEAN_FLAGS,
+    });
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  if (sub !== 'detect') {
+    console.error(`Unknown provider subcommand: ${sub}`);
+    printProviderHelp();
+    process.exit(2);
+  }
+  const base = await cliDaemonBaseUrl(flags);
+  const writeJson = (data) =>
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+  // The key is a secret: --api-key or stdin only, never a positional
+  // (it would land in shell history).
+  let apiKey = typeof flags['api-key'] === 'string' ? flags['api-key'] : '';
+  if (!apiKey && !process.stdin.isTTY) {
+    apiKey = (await readStdinUtf8()).trim();
+  }
+  if (!apiKey) {
+    console.error('Usage: od provider detect [--api-key <key>] (or pipe the key on stdin)');
+    process.exit(2);
+  }
+  let resp;
+  try {
+    resp = await fetch(`${base}/api/provider/detect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey }),
+    });
+  } catch (err) {
+    surfaceFetchError(err, base);
+    process.exit(3);
+  }
+  if (!resp.ok) return structuredHttpFailure(resp);
+  const data = await resp.json();
+  if (flags.json) return writeJson(data);
+  if (!data.detected) {
+    console.log('No provider detected for this key shape. Set the provider, base URL and model by hand in Settings.');
+    return;
+  }
+  console.log(`Detected: ${data.providerLabel} (${data.protocol})`);
+  console.log(`Base URL: ${data.baseUrl}`);
+  console.log(`Free model: ${data.freeModel}`);
+}
+
+async function runAntigravity(args) {
+  if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
+    printAntigravityHelp();
+    process.exit(args.length === 0 ? 2 : 0);
+  }
+  const sub = args[0];
+  const rest = args.slice(1);
+  let flags;
+  try {
+    flags = parseFlags(rest, {
+      string: ANTIGRAVITY_STRING_FLAGS,
+      boolean: ANTIGRAVITY_BOOLEAN_FLAGS,
+    });
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  if (sub !== 'accounts') {
+    console.error(`Unknown antigravity subcommand: ${sub}`);
+    printAntigravityHelp();
+    process.exit(2);
+  }
+  const base = await cliDaemonBaseUrl(flags);
+  const writeJson = (data) =>
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+  const parts = positionalArgs(rest, ANTIGRAVITY_STRING_FLAGS);
+  const action = parts[0] ?? 'list';
+
+  const fetchJson = async (path, init) => {
+    let resp;
+    try {
+      resp = await fetch(`${base}${path}`, init);
+    } catch (err) {
+      surfaceFetchError(err, base);
+      process.exit(3);
+    }
+    if (!resp.ok) return structuredHttpFailure(resp);
+    if (resp.status === 204) return null;
+    return resp.json();
+  };
+
+  if (action === 'list') {
+    const data = await fetchJson('/api/antigravity/accounts');
+    if (flags.json) return writeJson(data);
+    const accounts = data.accounts ?? [];
+    if (accounts.length === 0) {
+      console.log('No Antigravity accounts connected. Add one with: od antigravity accounts add --label "Account 1"');
+      return;
+    }
+    for (const account of accounts) {
+      const marks = [
+        account.active ? 'active' : null,
+        account.quotaExhausted
+          ? `quota exhausted until ${account.quotaExhaustedUntil}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      console.log(
+        `${account.id}\t${account.label}${marks ? ` (${marks})` : ''}`,
+      );
+    }
+    return;
+  }
+  if (action === 'add') {
+    const label =
+      typeof flags.label === 'string' ? flags.label : (parts[1] ?? '');
+    if (!label.trim()) {
+      console.error('Usage: od antigravity accounts add --label "Account 1"');
+      process.exit(2);
+    }
+    const data = await fetchJson('/api/antigravity/accounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label }),
+    });
+    if (flags.json) return writeJson(data);
+    const account = data.account;
+    console.log(`Added Antigravity account ${account.id} ("${account.label}").`);
+    console.log('Sign it in (browser OAuth) with:');
+    console.log(`  HOME=${account.homeDir} agy`);
+    console.log('Open the sign-in URL in your browser, complete Google sign-in, and agy stores the login in that account home.');
+    return;
+  }
+  if (action === 'activate' || action === 'clear-quota') {
+    const id = parts[1];
+    if (!id) {
+      console.error(`Usage: od antigravity accounts ${action} <id>`);
+      process.exit(2);
+    }
+    const data = await fetchJson(
+      `/api/antigravity/accounts/${encodeURIComponent(id)}/${action === 'activate' ? 'activate' : 'clear-quota'}`,
+      { method: 'POST' },
+    );
+    if (flags.json) return writeJson(data);
+    console.log(
+      action === 'activate'
+        ? `Active Antigravity account: ${data.account.id} ("${data.account.label}").`
+        : `Cleared quota flag for ${data.account.id} ("${data.account.label}").`,
+    );
+    return;
+  }
+  if (action === 'remove') {
+    const id = parts[1];
+    if (!id) {
+      console.error('Usage: od antigravity accounts remove <id>');
+      process.exit(2);
+    }
+    await fetchJson(`/api/antigravity/accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (flags.json) return writeJson({ removed: true, id });
+    console.log(`Removed Antigravity account ${id} (its stored login was deleted too).`);
+    return;
+  }
+  console.error(`Unknown antigravity accounts action: ${action}`);
+  printAntigravityHelp();
+  process.exit(2);
 }
 
 async function runAutomation(args) {

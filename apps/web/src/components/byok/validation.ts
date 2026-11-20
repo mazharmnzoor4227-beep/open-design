@@ -1,4 +1,5 @@
 import { validateBaseUrl } from '@open-design/contracts/api/connectionTest';
+import { detectProviderFromApiKey } from '@open-design/contracts/api/providerKeyDetection';
 import type { ApiProtocol, ProviderModelOption } from '../../types';
 
 export type ByokDraftField = 'api_key' | 'base_url' | 'model';
@@ -318,11 +319,14 @@ function validateApiKeyShape(
   return null;
 }
 
+/**
+ * Infer the protocol a pasted API key belongs to, from the key format
+ * alone. Shared implementation lives in `@open-design/contracts` so the
+ * web form, the daemon `POST /api/provider/detect` endpoint, and the
+ * `od provider detect` CLI all agree on what a key means.
+ */
 function detectByokApiKeyProtocol(apiKey: string): ApiProtocol | null {
-  if (apiKey.startsWith('sk-ant-')) return 'anthropic';
-  if (isGoogleGeminiApiKeyShape(apiKey)) return 'google';
-  if (apiKey.startsWith('sk-')) return 'openai';
-  return null;
+  return detectProviderFromApiKey(apiKey)?.protocol ?? null;
 }
 
 /** Legacy AI Studio keys (AIza…) and service-account-bound keys (AQ.…). */

@@ -43,6 +43,7 @@ import type { Locale } from '../i18n';
 import type { Dict } from '../i18n/types';
 import { AgentIcon } from './AgentIcon';
 import { AgentDiagnosticRow } from './AgentDiagnosticRow';
+import { AntigravityAccounts } from './AntigravityAccounts';
 import { DeepSeekHarnessSetupDialog } from './DeepSeekHarnessSetupDialog';
 import { AmrLoginPill } from './AmrLoginPill';
 import { PlanBadge } from './PlanBadge';
@@ -143,7 +144,8 @@ import {
 import { MEDIA_PROVIDERS } from '../media/models';
 import { useByokImageModelOptions, useByokVideoModelOptions, useByokSpeechModelOptions } from '../media/aihubmix-image-models';
 import { isVisualStabilityMode } from '../utils/visualStability';
-import { byokProviderRequiresApiKey } from '../utils/byokProvider';
+import { byokProviderRequiresApiKey, isLocalOllamaBaseUrl } from '../utils/byokProvider';
+import { detectProviderFromApiKey } from '@open-design/contracts/api/providerKeyDetection';
 import { XaiOAuthControl } from './XaiOAuthControl';
 import type { MediaProvider } from '../media/models';
 import { Toast } from './Toast';
@@ -1698,6 +1700,13 @@ export function SettingsDialog({
   const [dshSetup, setDshSetup] = useState<{ busy: boolean; error: string | null } | null>(null);
   const [agentRescanNotice, setAgentRescanNotice] =
     useState<RescanNotice | null>(null);
+  // One-shot feedback for key-format auto-detection: shown when a pasted
+  // API key switched the provider (and pre-selected its free model), then
+  // fades like the rescan notice below.
+  const [byokAutoDetectNotice, setByokAutoDetectNotice] = useState<{
+    providerLabel: string;
+    freeModel: string;
+  } | null>(null);
   const [agentTestState, setAgentTestState] = useState<TestState>({
     status: 'idle',
   });
@@ -2155,6 +2164,11 @@ export function SettingsDialog({
     return () => window.clearTimeout(id);
   }, [agentRescanNotice]);
   useEffect(() => {
+    if (!byokAutoDetectNotice) return;
+    const id = window.setTimeout(() => setByokAutoDetectNotice(null), 6000);
+    return () => window.clearTimeout(id);
+  }, [byokAutoDetectNotice]);
+  useEffect(() => {
     if (providerTestFirstResetRef.current) {
       providerTestFirstResetRef.current = false;
       return;
@@ -2232,7 +2246,10 @@ export function SettingsDialog({
       return { ...c, mode };
     });
   };
-  const setByokProvider = (provider: ByokProviderPreset) => {
+  const setByokProvider = (
+    provider: ByokProviderPreset,
+    options?: { preserveApiKey?: boolean; modelOverride?: string },
+  ) => {
     const currentDraftKey = byokProviderKeyForConfig(cfg);
     const currentApiConfig = currentApiProtocolConfig(cfg);
     if ((cfg.apiProviderBaseUrl ?? null) === null) {
@@ -2335,9 +2352,15 @@ export function SettingsDialog({
       }
       applyDraftUiState(undefined);
       return updateCurrentApiProtocolConfig(switchedWithCurrentDraft, {
-        ...(providerChanged ? { apiKey: '' } : {}),
+        // Key-format auto-detection passes preserveApiKey so a just-pasted
+        // key survives the switch (and is re-asserted afterwards in case a
+        // restored per-provider draft holds an older key); a manual provider
+        // switch still clears the key, as before.
+        ...(providerChanged && !options?.preserveApiKey ? { apiKey: '' } : {}),
         baseUrl: provider.baseUrl,
-        model: provider.preferredModels[0] ?? '',
+        // modelOverride lets auto-detection pre-select the detected
+        // provider's free model instead of the preset's first preference.
+        model: options?.modelOverride ?? provider.preferredModels[0] ?? '',
         apiProviderBaseUrl: provider.baseUrl,
       });
     });
@@ -3678,6 +3701,38 @@ export function SettingsDialog({
     // characters — otherwise a key like "sk-ant-...\n" would only raise a
     // non-blocking warning yet still go out malformed over the wire.
     const cleanedApiKey = cleanByokApiKey(cfg.apiKey);
+    // Key-format auto-detection: a pasted key carries its provider in its
+    // format (AIza… → Gemini, sk-ant-… → Anthropic, sk-or-… → OpenRouter,
+    // xai-… → xAI, sk-… → OpenAI). When the key belongs to a different
+    // provider than the one currently selected, switch the whole provider
+    // (protocol + base URL) and pre-select that provider's free model, so
+    // the user never picks a base URL or a model by hand. The pasted key is
+    // re-asserted after the switch so a restored per-provider draft can
+    // never clobber it with an older key. When the key already matches the
+    // current provider, nothing changes and no notice is shown.
+    const detection = detectProviderFromApiKey(cleanedApiKey);
+    if (detection) {
+      const detectedPreset = BYOK_PROVIDER_PRESETS.find(
+        (preset) =>
+          preset.protocol === detection.protocol &&
+          preset.baseUrl === detection.baseUrl,
+      );
+      const providerChanged =
+        detectedPreset != null &&
+        ((cfg.apiProtocol ?? 'anthropic') !== detectedPreset.protocol ||
+          (cfg.apiProviderBaseUrl ?? null) !== detectedPreset.baseUrl);
+      if (detectedPreset && providerChanged) {
+        setByokProvider(detectedPreset, {
+          preserveApiKey: true,
+          modelOverride: detection.freeModel,
+        });
+        updateApiConfig({ apiKey: cleanedApiKey });
+        setByokAutoDetectNotice({
+          providerLabel: detection.providerLabel,
+          freeModel: detection.freeModel,
+        });
+      }
+    }
     const currentProviderKey = byokProviderKeyForConfig(cfg);
     const activeConfig = autosaveLastSavedRef.current;
     const commitsClearedActiveApiKey =
@@ -5378,6 +5433,11 @@ export function SettingsDialog({
                       </ol>
                     </div>
                   ) : null}
+                  <AntigravityAccounts
+                    antigravityAvailable={agents.some(
+                      (a) => a.id === 'antigravity' && a.available,
+                    )}
+                  />
                 </>
               )}
               {(() => {
@@ -5656,6 +5716,14 @@ export function SettingsDialog({
                 }}
                 onToggleShowApiKey={() => setShowApiKey((v) => !v)}
               />
+              {byokAutoDetectNotice ? (
+                <p className="hint" role="status">
+                  {t('settings.byokAutoDetected', {
+                    provider: byokAutoDetectNotice.providerLabel,
+                    model: byokAutoDetectNotice.freeModel,
+                  })}
+                </p>
+              ) : null}
               {showBaseUrlField ? (
                 <ByokProviderBaseUrl
                   apiProtocol={apiProtocol}
@@ -5790,6 +5858,9 @@ export function SettingsDialog({
                   updateApiConfig({ model: nextValue });
                 }}
               />
+              {isLocalOllamaBaseUrl(cfg.baseUrl) ? (
+                <p className="hint">{t('settings.localModelNote')}</p>
+              ) : null}
               <details className="agent-cli-env settings-memory-advanced">
                 <summary className="agent-cli-env-summary">
                   <span className="agent-cli-env-summary-title">

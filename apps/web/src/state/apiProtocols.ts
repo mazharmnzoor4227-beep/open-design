@@ -60,6 +60,7 @@ export const SUGGESTED_MODELS_BY_PROTOCOL: Record<ApiProtocol, readonly string[]
     'gpt-4o-mini',
   ],
   google: [
+    'gemini-3.8-flash',
     'gemini-3.5-flash',
     'gemini-3.1-pro-preview',
     'gemini-3-flash-preview',
@@ -165,7 +166,7 @@ export const FAST_MODEL_BY_PROTOCOL: Record<ApiProtocol, string> = {
   anthropic: 'claude-haiku-4-5',
   openai: 'gpt-4o-mini',
   azure: 'gpt-4o-mini',
-  google: 'gemini-3.5-flash',
+  google: 'gemini-3.8-flash',
   // Ollama Cloud doesn't have a clean "fast small model" default that
   // works for the LLM memory extractor — the catalog skews to large
   // open-weight checkpoints. Fall back to a small Gemma so the auto-

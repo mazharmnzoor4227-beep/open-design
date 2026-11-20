@@ -372,3 +372,62 @@ describe('BYOK draft validation', () => {
     ).toEqual({ model: '', source: 'empty' });
   });
 });
+
+describe('BYOK key-format detection (shared with the daemon/CLI)', () => {
+  // The web form, POST /api/provider/detect, and `od provider detect`
+  // share one prefix table in @open-design/contracts. These cases pin
+  // the shapes the old web-only detector missed: xAI keys were
+  // undetected entirely, and OpenRouter keys only matched by accident
+  // of the generic sk- rule.
+  it('detects xAI and OpenRouter keys as OpenAI-protocol keys', () => {
+    for (const apiKey of ['xai-abc123', 'sk-or-v1-abc123']) {
+      const validation = validateByokDraft('anthropic', {
+        apiKey,
+        baseUrl: 'https://api.anthropic.com',
+        model: 'claude-sonnet-4-5',
+      });
+      expect(validation.ok).toBe(false);
+      expect(validation.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'api_key',
+            level: 'error',
+            code: 'api_key_wrong_protocol',
+            detectedProtocol: 'openai',
+          }),
+        ]),
+      );
+    }
+  });
+
+  it('detects a Google Gemini key pasted into the OpenAI tab', () => {
+    const validation = validateByokDraft('openai', {
+      apiKey: 'AIzaSyD-abc123xyz',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+    });
+    expect(validation.ok).toBe(false);
+    expect(validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'api_key',
+          level: 'error',
+          detectedProtocol: 'google',
+        }),
+      ]),
+    );
+  });
+
+  it('accepts a service-account-bound Google key (AQ.…) on the Google tab', () => {
+    const validation = validateByokDraft('google', {
+      apiKey: 'AQ.Abcdefghijklmnopqrstuvwxyz0123456789',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      model: 'gemini-3.8-flash',
+    });
+    expect(validation.issues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'api_key', level: 'error' }),
+      ]),
+    );
+  });
+});

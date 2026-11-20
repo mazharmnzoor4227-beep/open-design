@@ -76,6 +76,48 @@ describe('acquireAntigravityModelLock', () => {
 
     releaseC();
   });
+
+  // Multi-account fork: the chain is keyed by settings path, so runs on
+  // different accounts (different settings.json files) must NOT
+  // serialize against each other — only runs sharing one account's
+  // settings file serialize. A regression to a single global chain
+  // would make a busy account block every other account's runs.
+  it('does not serialize acquirers on different settings paths', async () => {
+    const events: string[] = [];
+
+    const releaseA = await acquireAntigravityModelLock(
+      '/accounts/ag-aaaaaaaa/.gemini/antigravity-cli/settings.json',
+    );
+    events.push('A-acquired');
+
+    // B is on a different account's settings file — it must acquire
+    // immediately, without waiting for A to release.
+    const releaseB = await acquireAntigravityModelLock(
+      '/accounts/ag-bbbbbbbb/.gemini/antigravity-cli/settings.json',
+    );
+    events.push('B-acquired');
+
+    expect(events).toEqual(['A-acquired', 'B-acquired']);
+
+    // C shares A's settings file — it must still wait for A.
+    const cPromise = acquireAntigravityModelLock(
+      '/accounts/ag-aaaaaaaa/.gemini/antigravity-cli/settings.json',
+    ).then((release) => {
+      events.push('C-acquired');
+      return release;
+    });
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(events).toEqual(['A-acquired', 'B-acquired']);
+
+    releaseA();
+    const releaseC = await cPromise;
+    expect(events).toEqual(['A-acquired', 'B-acquired', 'C-acquired']);
+
+    releaseB();
+    releaseC();
+  });
 });
 
 describe('waitForAgyToReadModel', () => {

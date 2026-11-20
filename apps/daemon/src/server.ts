@@ -10,6 +10,12 @@ import { createUserDesignSystem } from './design-systems/index.js';
 import { resolveWorkspaceScope } from './collab/workspace-scope.js';
 import { cancelRevokedWorkspaceRuns, createWorkspaceMembershipRevocationObserver } from './collab/cancel-revoked-workspace-runs.js';
 import { startEvidenceDelivery } from './services/evidence-delivery.js';
+import {
+  antigravityAccountHomeDir,
+  antigravityAccountSettingsPath,
+  markAntigravityAccountQuotaExhausted,
+  resolveAntigravityAccountForRun,
+} from './services/antigravity-accounts.js';
 import { createRevokedWorkspaceRunCancellation, workspaceRunActorKey } from './services/cancel-revoked-workspace-runs.js';
 import type {
   DesktopExportArtifactInput,
@@ -877,6 +883,7 @@ import {
 } from './live-artifacts/http-helpers.js';
 import { registerConnectorRoutes } from './connectors/routes.js';
 import { registerActiveContextRoutes } from './routes/active-context.js';
+import { registerAntigravityAccountsRoutes } from './routes/antigravity-accounts.js';
 import { registerAutomationRoutes } from './routes/automation.js';
 import { registerAttributionRoutes } from './routes/attribution.js';
 import { registerDaemonRoutes } from './routes/daemon.js';
@@ -8334,6 +8341,10 @@ export async function startServer({
     paths: { RUNTIME_DATA_DIR },
   });
 
+  registerAntigravityAccountsRoutes(app, {
+    paths: { RUNTIME_DATA_DIR },
+  });
+
   // Reconcile follow-up — the inline POST /api/projects body that lived
   // on garnet (with baseDir privilege check, linkedDirs validation,
   // template snapshot seeding, plugin snapshot resolution with default
@@ -14430,6 +14441,28 @@ export async function startServer({
       def.id === 'antigravity'
         ? path.join(os.tmpdir(), `od-agy-${run.id}.log`)
         : undefined;
+
+    // Multi-account Antigravity: each connected account keeps its own
+    // OAuth credentials under its own HOME directory (see
+    // `services/antigravity-accounts.ts`). Resolve the account for this
+    // run BEFORE buildArgs (which writes the model into that account's
+    // settings.json) and before spawn (which needs HOME pointed at the
+    // account). No accounts configured → null, and everything below
+    // falls back to stock single-login behaviour (daemon HOME, default
+    // settings path).
+    const runAntigravityAccount =
+      def.id === 'antigravity'
+        ? resolveAntigravityAccountForRun(RUNTIME_DATA_DIR)
+        : null;
+    const runAntigravitySettingsPath = runAntigravityAccount
+      ? antigravityAccountSettingsPath(
+          RUNTIME_DATA_DIR,
+          runAntigravityAccount.id,
+        )
+      : undefined;
+    const runAntigravityHomeDir = runAntigravityAccount
+      ? antigravityAccountHomeDir(RUNTIME_DATA_DIR, runAntigravityAccount.id)
+      : undefined;
     const promptFile = await preparePromptFileForAgent(def, composed, run.id);
     const cleanupPromptFile = () => {
       if (promptFile) promptFile.cleanup().catch(() => {});
@@ -14548,7 +14581,11 @@ export async function startServer({
       const { acquireAntigravityModelLock } = await import(
         './runtimes/defs/antigravity.js'
       );
-      antigravityModelLockRelease = await acquireAntigravityModelLock();
+      // Key the lock by this run's account settings path so runs on
+      // different accounts don't serialize against each other.
+      antigravityModelLockRelease = await acquireAntigravityModelLock(
+        runAntigravitySettingsPath,
+      );
     }
 
     let args;
@@ -14568,6 +14605,9 @@ export async function startServer({
           cwd: effectiveCwd,
           hasPriorAssistantTurn,
           agentLogFilePath,
+          ...(runAntigravitySettingsPath
+            ? { antigravitySettingsPath: runAntigravitySettingsPath }
+            : {}),
           promptFilePath: promptFile?.path,
           resumeSessionId: agentResumePromptPolicy.resumeSessionId,
           newSessionId: agentResumeCtx.newSessionId,
@@ -15289,6 +15329,11 @@ export async function startServer({
             });
           },
         }),
+        // Multi-account Antigravity: point agy at this run's account
+        // credential home so it reads that account's OAuth login and
+        // settings.json. Placed before the OD_TASK_INPUT_DIR spread,
+        // which must stay last.
+        ...(runAntigravityHomeDir ? { HOME: runAntigravityHomeDir } : {}),
         // Daemon-owned resolver for task-input: references. Keep this last so
         // configured/BYOK/runtime env cannot redirect the Agent from the
         // verified Run projection back to mutable or canonical bytes.
@@ -16994,6 +17039,58 @@ export async function startServer({
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
       if (run.pendingTerminalFinish) return;
+      // Multi-account Antigravity quota rotation (see
+      // `services/antigravity-accounts.ts`): agy exits 0 silently on
+      // quota exhaustion, so the only place it surfaces is the
+      // `--log-file`. Read its tail (same 8 KB window the connection
+      // test uses); on RATE_LIMITED, flag this run's account
+      // quota-exhausted so the NEXT run rotates to another connected
+      // account, and tell the chat which account is next. Only when
+      // the run failed to produce output — a successful run's log never
+      // carries a quota line, and a cancelled run must not burn an
+      // account's quota flag. Rotation happens between runs; a run that
+      // already hit quota is not retried mid-run.
+      if (
+        def.id === 'antigravity'
+        && runAntigravityAccount
+        && agentLogFilePath
+        && !run.cancelRequested
+        && (code !== 0 || !agentProducedOutput)
+      ) {
+        try {
+          const logTail = (await fs.promises.readFile(agentLogFilePath, 'utf8')).slice(-8192);
+          if (classifyAgentServiceFailure(logTail) === 'RATE_LIMITED') {
+            const flagged = markAntigravityAccountQuotaExhausted(
+              RUNTIME_DATA_DIR,
+              runAntigravityAccount.id,
+            );
+            const nextAccount = flagged
+              ? resolveAntigravityAccountForRun(RUNTIME_DATA_DIR)
+              : null;
+            const rotated = nextAccount
+              && nextAccount.id !== runAntigravityAccount.id;
+            send('agent', {
+              type: 'diagnostic',
+              name: 'antigravity_account_quota_exhausted',
+              source: 'daemon-run-finalize',
+              message: rotated
+                ? `Antigravity account "${runAntigravityAccount.label}" hit its quota. The next run will use "${nextAccount.label}".`
+                : `Antigravity account "${runAntigravityAccount.label}" hit its quota and no other connected account has quota left.`,
+              accountId: runAntigravityAccount.id,
+              accountLabel: runAntigravityAccount.label,
+              ...(rotated
+                ? {
+                    nextAccountId: nextAccount.id,
+                    nextAccountLabel: nextAccount.label,
+                  }
+                : {}),
+            });
+          }
+        } catch {
+          // Missing/unreadable log file — the run's own failure paths
+          // below still report the failure; rotation just doesn't happen.
+        }
+      }
       if (acpSession) beginAcpAttemptTermination('acp_child_close');
       if (
         def.id === 'codex' &&

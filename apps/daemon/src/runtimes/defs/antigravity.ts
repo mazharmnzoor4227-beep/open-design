@@ -63,6 +63,15 @@ export function encodeAntigravityStdinPrompt(prompt: string): string {
 // consumer-tier accounts as of 2026-05-28. The set is small and stable
 // enough to ship statically until upstream adds a programmatic
 // `agy models` subcommand (also tracked under issue #35).
+//
+// STALE SNAPSHOT WARNING (fork note, 2026-11-20): several of these labels
+// no longer exist on the free tier — since 18 Nov 2026 the only free
+// model is Gemini 3.8 Flash, and its exact TUI label is not in this list.
+// Do NOT add guessed labels: a typed id agy doesn't recognise resolves
+// to a silent `availableModels` cache miss + empty headless output.
+// Leave the Settings model picker on 'default' (settings.json untouched)
+// and pick the model in agy's own TUI instead; the daemon uses whatever
+// agy last picked there.
 const ANTIGRAVITY_SETTINGS_PATH = join(
   homedir(),
   '.gemini',
@@ -92,33 +101,42 @@ export function writeAntigravityModelSelection(
 }
 
 // Per-process serialization for write-settings → spawn → agy-reads
-// cycles on antigravity. `~/.gemini/antigravity-cli/settings.json` is
-// process-global, so two OD runs that both pick concrete (non-default)
-// models can race: run A writes model A, spawn A starts, run B writes
-// model B before A's agy has read settings.json — A then executes on
-// model B. The daemon serialises non-default antigravity spawns
-// through this chain: each acquire awaits the previous release, and
-// each release fires only after the spawned agy actually emits
+// cycles on antigravity. Each account has its OWN settings.json (see
+// `services/antigravity-accounts.ts`), so the chain is keyed by settings
+// path: runs on different accounts no longer serialize against each
+// other, while runs on the SAME account still serialize — two OD runs
+// that both pick concrete (non-default) models on one account can race:
+// run A writes model A, spawn A starts, run B writes model B before
+// A's agy has read settings.json — A then executes on model B. The
+// daemon serialises non-default antigravity spawns through this chain:
+// each acquire awaits the previous release, and each release fires only
+// after the spawned agy actually emits
 // `Propagating selected model override to backend: label="<X>"` in
 // its `--log-file` (which is the upstream signal that settings.json
 // has been read).
-let antigravityLockChain: Promise<void> = Promise.resolve();
+const antigravityLockChains = new Map<string, Promise<void>>();
 
-export async function acquireAntigravityModelLock(): Promise<() => void> {
-  const previous = antigravityLockChain;
+export async function acquireAntigravityModelLock(
+  settingsPath: string = ANTIGRAVITY_SETTINGS_PATH,
+): Promise<() => void> {
+  const previous =
+    antigravityLockChains.get(settingsPath) ?? Promise.resolve();
   let release: () => void = () => {};
-  antigravityLockChain = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  antigravityLockChains.set(
+    settingsPath,
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
   await previous;
   return release;
 }
 
-// Visible for tests. Resets the module-level lock chain so a test that
+// Visible for tests. Resets the module-level lock chains so a test that
 // installed a hanging acquirer can release it without leaking state to
 // subsequent test cases. Production code never calls this.
 export function _resetAntigravityModelLockForTests(): void {
-  antigravityLockChain = Promise.resolve();
+  antigravityLockChains.clear();
 }
 
 export interface WaitForAgyModelOptions {
