@@ -11,6 +11,46 @@ export function isLocalOllamaBaseUrl(baseUrl: string): boolean {
   }
 }
 
+/**
+ * True when a provider base URL points at the local machine: loopback,
+ * a private-LAN address, or Docker's `host.docker.internal` alias for the
+ * host gateway (how a containerized daemon reaches a host llama-server).
+ * Local endpoints serve their models without an API key, so model discovery
+ * may run keyless against them. Mirrors the daemon's
+ * `isLoopbackOrPrivateLanHost` (+ the Docker alias); keep the two in sync.
+ */
+export function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]' ||
+      hostname === '::1' ||
+      hostname === 'host.docker.internal'
+    ) {
+      return true;
+    }
+    const parts = hostname.split('.');
+    if (parts.length !== 4 || !parts.every((part) => /^\d+$/.test(part))) {
+      return false;
+    }
+    const octets = parts.map(Number);
+    if (!octets.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+      return false;
+    }
+    const [a, b] = octets as [number, number, number, number];
+    return (
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function byokProviderRequiresApiKey(
   protocol: ApiProtocol,
   provider: KnownProvider | undefined,

@@ -260,7 +260,10 @@ function providerModelsHeaders(
   apiKey: string,
 ): Record<string, string> {
   if (protocol === 'openai' || protocol === 'senseaudio') {
-    return { authorization: `Bearer ${apiKey}` };
+    // Local keyless endpoints (llama-server, Ollama, vLLM) serve /v1/models
+    // with no auth — an empty `Bearer ` would be rejected by some of them,
+    // so send no header when the key is blank (same rule as aihubmix below).
+    return apiKey.trim() ? { authorization: `Bearer ${apiKey}` } : {};
   }
   if (protocol === 'aihubmix') {
     // The catalogue is public — only attach Bearer auth (+ APP-Code) when the

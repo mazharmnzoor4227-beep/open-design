@@ -476,7 +476,8 @@ describe('SettingsDialog API protocol switching', () => {
       apiProtocol: 'google',
       apiKey: '',
       baseUrl: 'https://generativelanguage.googleapis.com',
-      model: 'gemini-3.5-flash',
+      // Fork: the free Gemini default is 3.8 Flash (3.5 Flash is stale).
+      model: 'gemini-3.8-flash',
       apiProviderBaseUrl: 'https://generativelanguage.googleapis.com',
     });
   });
@@ -616,6 +617,35 @@ describe('SettingsDialog provider model fetch helpers', () => {
         'https://token-plan-cn.xiaomimimo.com/anthropic',
       ),
     ).toBe(true);
+  });
+
+  it('allows a keyless fetch against a local base URL (fork: local models)', () => {
+    // Local servers (llama-server, Ollama, vLLM) serve /v1/models with no
+    // auth — the Fetch Models button must work for the keyless local preset.
+    // A public host still needs a key.
+    for (const baseUrl of [
+      'http://127.0.0.1:8081/v1',
+      'http://localhost:8081/v1',
+      'http://host.docker.internal:8081/v1',
+      'http://192.168.1.5:8081/v1',
+      'http://10.0.0.5:11434/v1',
+    ]) {
+      expect(canFetchProviderModels({ apiKey: '', baseUrl }, 'openai')).toBe(
+        true,
+      );
+    }
+    expect(
+      canFetchProviderModels(
+        { apiKey: '', baseUrl: 'https://api.openai.com/v1' },
+        'openai',
+      ),
+    ).toBe(false);
+    expect(
+      canFetchProviderModels(
+        { apiKey: '', baseUrl: 'https://models.example.com/v1' },
+        'openai',
+      ),
+    ).toBe(false);
   });
 
   it('merges fetched provider models before static suggestions without duplicates', () => {

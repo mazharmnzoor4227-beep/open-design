@@ -144,7 +144,7 @@ import {
 import { MEDIA_PROVIDERS } from '../media/models';
 import { useByokImageModelOptions, useByokVideoModelOptions, useByokSpeechModelOptions } from '../media/aihubmix-image-models';
 import { isVisualStabilityMode } from '../utils/visualStability';
-import { byokProviderRequiresApiKey, isLocalOllamaBaseUrl } from '../utils/byokProvider';
+import { byokProviderRequiresApiKey, isLocalBaseUrl, isLocalOllamaBaseUrl } from '../utils/byokProvider';
 import { detectProviderFromApiKey } from '@open-design/contracts/api/providerKeyDetection';
 import { XaiOAuthControl } from './XaiOAuthControl';
 import type { MediaProvider } from '../media/models';
@@ -717,7 +717,9 @@ export function canFetchProviderModels(
     !isProviderModelDiscoveryUnsupported(protocol, config.baseUrl) &&
     protocol !== 'azure' &&
     protocol !== 'ollama' &&
-    (protocol === 'bedrock' || Boolean(config.apiKey.trim())) &&
+    (protocol === 'bedrock' ||
+      Boolean(config.apiKey.trim()) ||
+      isLocalBaseUrl(config.baseUrl)) &&
     Boolean(config.baseUrl.trim()) &&
     isValidApiBaseUrl(config.baseUrl)
   );
@@ -756,8 +758,16 @@ function missingByokModelFetchFields(
   // AIHubMix publishes its catalogue on a public endpoint, so its model list
   // loads without a key (the user shouldn't need to paste a key just to browse
   // models). Bedrock uses a static model seed until AWS auth lands in BYOK.
+  // A local base URL (loopback / private LAN / host.docker.internal) also
+  // needs no key — local servers serve /v1/models with no auth.
   // Every other protocol fetches /v1/models behind the key.
-  if (protocol !== 'aihubmix' && protocol !== 'bedrock' && !config.apiKey.trim()) missing.push('api_key');
+  if (
+    protocol !== 'aihubmix' &&
+    protocol !== 'bedrock' &&
+    !config.apiKey.trim() &&
+    !isLocalBaseUrl(config.baseUrl)
+  )
+    missing.push('api_key');
   if (!config.baseUrl.trim()) missing.push('base_url');
   return missing;
 }

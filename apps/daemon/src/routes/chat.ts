@@ -35,6 +35,7 @@ import { isSafeId as isSafeProjectId } from '../projects.js';
 import { projectKindToTracking } from '@open-design/contracts/analytics';
 import { detectProviderResponse } from '@open-design/contracts/api/providerKeyDetection';
 import { proxyDispatcherRequestInit, validateUserProviderBaseUrl } from '../connectionTest.js';
+import { isLoopbackOrPrivateLanHost } from '../origin-validation.js';
 import { isKnownReasoningEffort, resolveModelForServiceTier } from '../runtimes/models.js';
 import { googleStreamGenerateContentUrl } from '../integrations/google-models.js';
 import { createRoleMarkerGuard } from '../role-marker-guard.js';
@@ -63,6 +64,27 @@ const FEEDBACK_REASON_ALLOWLIST: ReadonlySet<string> = new Set([
 
 export interface RegisterChatRoutesDeps extends RouteDeps<'db' | 'design' | 'http' | 'chat' | 'agents' | 'critique' | 'validation' | 'lifecycle' | 'paths' | 'telemetry' | 'appConfig'> {
   authorizeProjectRequest: AuthorizeProjectRequest;
+}
+
+/**
+ * True when a provider base URL points at the local machine: loopback,
+ * a private-LAN address, or Docker's `host.docker.internal` alias for the
+ * host gateway (how a containerized daemon reaches a host llama-server).
+ * Local endpoints serve their models without an API key, so model
+ * discovery may run keyless against them. Anything else is treated as a
+ * public host and still requires a key.
+ */
+function isLocalProviderBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== 'string' || !baseUrl.trim()) return false;
+  try {
+    const hostname = new URL(baseUrl.trim()).hostname.toLowerCase();
+    return (
+      hostname === 'host.docker.internal' ||
+      isLoopbackOrPrivateLanHost(hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
@@ -221,9 +243,18 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       );
     }
     // AIHubMix's catalogue (GET /api/v1/models?type=llm) is public, so its
-    // model list loads without a key. Every other protocol needs the key to
-    // hit its /v1/models endpoint.
-    const apiKeyRequired = protocol !== 'aihubmix' && protocol !== 'bedrock';
+    // model list loads without a key. A base URL that points at the local
+    // machine (loopback / private LAN / Docker's host.docker.internal
+    // alias for the host gateway) is also keyless: local OpenAI-compatible
+    // servers (llama-server, Ollama, vLLM) serve /v1/models with no auth,
+    // and the fork's local-model preset relies on this to discover whatever
+    // model the local server currently serves. Every other protocol/host
+    // needs the key to hit its /v1/models endpoint.
+    const baseUrlIsLocal = isLocalProviderBaseUrl(body.baseUrl);
+    const apiKeyRequired =
+      protocol !== 'aihubmix' &&
+      protocol !== 'bedrock' &&
+      !baseUrlIsLocal;
     if (
       typeof body.baseUrl !== 'string' ||
       typeof body.apiKey !== 'string' ||

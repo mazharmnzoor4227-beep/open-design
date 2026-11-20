@@ -377,15 +377,18 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // Local llama-server (e.g. llama.cpp server on this machine or the
     // user's own server). No API key needed — the daemon talks to it
     // directly over the loopback OpenAI-compatible endpoint. The model is
-    // whatever the server currently serves; the fetch step replaces the
-    // LFM3-1.7B default with the server's actual model id when it differs.
+    // whatever the server currently serves; the keyless fetch step replaces
+    // the lfm3-1.7b default with the server's actual model id when it
+    // differs. In a containerized daemon the host's server is reached at
+    // http://host.docker.internal:8081/v1 instead (same server, Docker's
+    // host-gateway alias) — edit the base URL if the fetch fails.
     // Honest limit, also shown under the model field: small local models
     // cannot match a Pro model's clone quality — use a 7B+ model for
     // decent clones.
     label: 'Local llama-server',
     protocol: 'openai',
     baseUrl: 'http://127.0.0.1:8081/v1',
-    preferredModels: ['LFM3-1.7B'],
+    preferredModels: ['lfm3-1.7b'],
     requiresApiKey: false,
   },
   {

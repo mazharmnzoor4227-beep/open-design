@@ -259,6 +259,7 @@ import {
   readStoredRailOpen,
 } from './entryRailBridge';
 import { resolveByokModelPreference } from './byok/validation';
+import { isLocalBaseUrl } from '../utils/byokProvider';
 import onboardingWelcomeStyles from './OnboardingWelcome.module.css';
 import { AmrActivationHintText } from './AmrActivationHintText';
 
@@ -2734,7 +2735,7 @@ function OnboardingView({
   const canFetchProviderModels =
     apiProtocol !== 'azure' &&
     apiProtocol !== 'ollama' &&
-    Boolean(config.apiKey.trim()) &&
+    (Boolean(config.apiKey.trim()) || isLocalBaseUrl(config.baseUrl)) &&
     Boolean(config.baseUrl.trim()) &&
     isLikelyHttpUrl(config.baseUrl);
   const visibleProviderTestState =

@@ -484,6 +484,52 @@ describe('POST /api/provider/models', () => {
     });
   });
 
+  // Fork: a local OpenAI-compatible server (llama-server, Ollama, vLLM)
+  // serves /v1/models with no auth, so model discovery must work keyless
+  // against loopback / private-LAN / host.docker.internal base URLs — and
+  // must NOT send an empty `Bearer ` header upstream. A keyless public
+  // host is still rejected.
+  it('lists models keyless from a local base URL without an auth header', async () => {
+    const fetchMock = passThroughOrUpstream((url, init) => {
+      expect(url).toBe('http://127.0.0.1:8081/v1/models');
+      expect(
+        (init?.headers as Record<string, string> | undefined)?.authorization,
+      ).toBeUndefined();
+      return jsonResponse({
+        data: [{ id: 'lfm3-1.7b', object: 'model' }],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await realFetch(`${baseUrl}/api/provider/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocol: 'openai',
+        baseUrl: 'http://127.0.0.1:8081/v1',
+        apiKey: '',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      kind: 'success',
+      models: [{ id: 'lfm3-1.7b', label: 'lfm3-1.7b' }],
+    });
+
+    const publicRes = await realFetch(`${baseUrl}/api/provider/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocol: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: '',
+      }),
+    });
+    expect(publicRes.status).toBe(400);
+  });
+
   it('lets unsupported contract protocols return a classified provider-models result', async () => {
     const fetchMock = passThroughOrUpstream(() => jsonResponse({}));
     vi.stubGlobal('fetch', fetchMock);
