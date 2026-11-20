@@ -725,6 +725,8 @@ export const ptBR: Dict = {
   'settings.fetchModelsFailed': 'Não foi possível buscar os modelos: {detail}',
   'settings.suggestedModelsHint': 'Estes são modelos sugeridos para este protocolo. Seu provedor pode oferecer suporte a modelos diferentes.',
   'settings.byokAutoDetected': 'Detected {provider} — base URL and free model ({model}) filled in automatically.',
+  'settings.byokAddKey': 'Add key',
+  'settings.byokKeyNotRecognized': 'Key not recognized — this key does not match a known provider. Pick a provider below, or use the local model instead.',
   'settings.onboardingSkip': 'Continue without a key',
   'settings.byokDetectedSummary': 'Provider: {provider} · Model: {model}',
   'settings.byokUseLocal': 'Use local model instead (no key needed)',

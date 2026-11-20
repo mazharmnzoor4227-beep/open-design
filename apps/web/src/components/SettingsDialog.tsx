@@ -1708,12 +1708,17 @@ export function SettingsDialog({
   const [agentRescanNotice, setAgentRescanNotice] =
     useState<RescanNotice | null>(null);
   // One-shot feedback for key-format auto-detection: shown when a pasted
-  // API key switched the provider (and pre-selected its free model), then
-  // fades like the rescan notice below.
+  // API key switched the provider (and pre-selected its free model). Fork:
+  // it PERSISTS until the key changes — the old 6s fade meant a user who
+  // pasted a key and looked away saw no confirmation at all (2026-11-20).
   const [byokAutoDetectNotice, setByokAutoDetectNotice] = useState<{
     providerLabel: string;
     freeModel: string;
   } | null>(null);
+  // Fork: shown when a pasted key matches NO known provider shape — silent
+  // no-ops are unacceptable (a Groq key did exactly this, 2026-11-20).
+  const [byokUnknownKeyNotice, setByokUnknownKeyNotice] =
+    useState<boolean>(false);
   const [agentTestState, setAgentTestState] = useState<TestState>({
     status: 'idle',
   });
@@ -2170,11 +2175,9 @@ export function SettingsDialog({
     const id = window.setTimeout(() => setAgentRescanNotice(null), 6000);
     return () => window.clearTimeout(id);
   }, [agentRescanNotice]);
-  useEffect(() => {
-    if (!byokAutoDetectNotice) return;
-    const id = window.setTimeout(() => setByokAutoDetectNotice(null), 6000);
-    return () => window.clearTimeout(id);
-  }, [byokAutoDetectNotice]);
+  // Fork: no auto-clear for byokAutoDetectNotice — the detection result is
+  // the user's only confirmation that the pasted key took effect, so it
+  // stays until the key changes or the dialog closes.
   useEffect(() => {
     if (providerTestFirstResetRef.current) {
       providerTestFirstResetRef.current = false;
@@ -3701,26 +3704,29 @@ export function SettingsDialog({
     }
     setProviderModelsCommittedKey(providerModelsKey);
   };
-  const onByokKeyCommit = () => {
+  // Fork: `overrideKey` lets the paste handler run detection on the pasted
+  // text immediately — at paste time cfg.apiKey still holds the old value.
+  const onByokKeyCommit = (overrideKey?: string) => {
     // Normalize the stored key on blur so the value that flows into the
     // connection-test / model-fetch requests below (and back to the daemon
     // via autosave) is already free of pasted whitespace / zero-width
     // characters — otherwise a key like "sk-ant-...\n" would only raise a
     // non-blocking warning yet still go out malformed over the wire.
-    const cleanedApiKey = cleanByokApiKey(cfg.apiKey);
+    const cleanedApiKey = cleanByokApiKey(overrideKey ?? cfg.apiKey);
     // Key-format auto-detection: a pasted key carries its provider in its
     // format (AIza… → Gemini, sk-ant-… → Anthropic, sk-or-… → OpenRouter,
-    // xai-… → xAI, sk-… → OpenAI). When the key belongs to a different
-    // provider than the one currently selected, switch the whole provider
-    // (protocol + base URL) and pre-select that provider's free model, so
-    // the user never picks a base URL or a model by hand. The pasted key is
-    // re-asserted after the switch so a restored per-provider draft can
-    // never clobber it with an older key. When the key already matches the
-    // current provider, the free model is still applied — a pasted key
-    // always carries its provider's free model, so the key just works
-    // without the user ever opening a model picker.
+    // xai-… → xAI, gsk_… → Groq, sk-… → OpenAI). When the key belongs to a
+    // different provider than the one currently selected, switch the whole
+    // provider (protocol + base URL) and pre-select that provider's free
+    // model, so the user never picks a base URL or a model by hand. The
+    // pasted key is re-asserted after the switch so a restored per-provider
+    // draft can never clobber it with an older key. When the key already
+    // matches the current provider, the free model is still applied — a
+    // pasted key always carries its provider's free model, so the key just
+    // works without the user ever opening a model picker.
     const detection = detectProviderFromApiKey(cleanedApiKey);
     if (detection) {
+      setByokUnknownKeyNotice(false);
       const detectedPreset = BYOK_PROVIDER_PRESETS.find(
         (preset) =>
           preset.protocol === detection.protocol &&
@@ -3748,7 +3754,22 @@ export function SettingsDialog({
           providerLabel: detection.providerLabel,
           freeModel: detection.freeModel,
         });
+      } else if (detectedPreset) {
+        // Fork: provider AND model already match — still show the notice,
+        // it is the user's only confirmation the pasted key took effect.
+        updateApiConfig({ apiKey: cleanedApiKey });
+        setByokAutoDetectNotice({
+          providerLabel: detection.providerLabel,
+          freeModel: detection.freeModel,
+        });
       }
+    } else if (cleanedApiKey !== '') {
+      // Fork: a key that matches no known shape must SAY so. The old code
+      // silently did nothing here, and the user concluded "no key works"
+      // (2026-11-20, Groq key). The notice persists until the key changes.
+      setByokUnknownKeyNotice(true);
+    } else {
+      setByokUnknownKeyNotice(false);
     }
     const currentProviderKey = byokProviderKeyForConfig(cfg);
     const activeConfig = autosaveLastSavedRef.current;
@@ -5562,7 +5583,18 @@ export function SettingsDialog({
                 onBlur={onByokKeyCommit}
                 onChange={(value) => {
                   committedClearedByokProviderKeyRef.current = null;
+                  // The key changed — any detection result shown above is
+                  // stale until the new key is committed (paste/Add/blur).
+                  setByokAutoDetectNotice(null);
+                  setByokUnknownKeyNotice(false);
                   updateApiConfig({ apiKey: value });
+                }}
+                onPaste={(text) => {
+                  if (!text.trim()) return;
+                  // Fork: run detection on the pasted text right away —
+                  // mobile users paste and tap Test without blurring first,
+                  // which is exactly how keys "never detected" (2026-11-20).
+                  window.setTimeout(() => onByokKeyCommit(text), 0);
                 }}
                 onFocus={() => {
                   const byokProviderId = byokProtocolToTracking(apiProtocol);
@@ -5586,6 +5618,11 @@ export function SettingsDialog({
                   })}
                 </p>
               ) : null}
+              {byokUnknownKeyNotice ? (
+                <p className="hint" role="status">
+                  {t('settings.byokKeyNotRecognized')}
+                </p>
+              ) : null}
               {selectedByokProvider && cfg.model.trim() ? (
                 <p className="hint" role="status">
                   {t('settings.byokDetectedSummary', {
@@ -5594,6 +5631,18 @@ export function SettingsDialog({
                   })}
                 </p>
               ) : null}
+              {/* Fork: explicit Add — paste/blur alone must not be the only
+                  trigger (mobile users paste and tap Test, never blurring
+                  first), and adding a key must NOT require the connection
+                  test to pass: the test times out whenever the local model
+                  is busy, which says nothing about the pasted key. */}
+              <button
+                type="button"
+                className="ghost settings-test-btn"
+                onClick={() => onByokKeyCommit()}
+              >
+                {t('settings.byokAddKey')}
+              </button>
               <button
                 type="button"
                 className="ghost settings-test-btn"

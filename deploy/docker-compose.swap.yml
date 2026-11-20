@@ -23,6 +23,12 @@ services:
       # (run 9f3845f3, 2026-11-20). 30 min covers the worst prefill; the
       # timer resets on any output, so a genuinely hung run still fails.
       OD_CHAT_RUN_INACTIVITY_TIMEOUT_MS: "1800000"
+      # Fork: the provider connection test defaulted to 12s — a smoke
+      # completion against the local llama-server queues behind the single
+      # slot's long generation and always timed out ("Test timed out after
+      # 12004 ms", 2026-11-20). The local test now returns from the models
+      # list instead, but a queued completion still gets 120s of room.
+      OD_CONNECTION_TEST_PROVIDER_TIMEOUT_MS: "120000"
       PATH: /mnt/host-local-bin:/usr/local/bin:/usr/bin:/bin
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -36,8 +42,10 @@ services:
     cpus: "1.5"
     # Fork: upstream defaults the container to 384m — an opencode run
     # (byok-opencode / Local) needs ~240MB+ at startup alone and the kernel
-    # OOM-killed it (SIGKILL, run c5742360, 2026-11-20). Host has 12GB.
-    mem_limit: "2g"
+    # OOM-killed it (SIGKILL, run c5742360, 2026-11-20). Raised to 2g then
+    # 4g: at 2g the daemon hit 99.5% and stopped answering HTTP while a
+    # long local run held the llama slot (2026-11-20). Host has 12GB.
+    mem_limit: "4g"
 
 volumes:
   open-design_open_design_data:

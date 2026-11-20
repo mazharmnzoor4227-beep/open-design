@@ -230,6 +230,21 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     ],
   },
   {
+    // Fork: Groq (gsk_ keys). Groq's free tier covers its models under
+    // rate limits; llama-3.3-70b-versatile is the flagship free chat model.
+    label: 'Groq',
+    protocol: 'openai',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    preferredModels: [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'qwen/qwen3-32b',
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+    ],
+  },
+  {
     label: 'Azure OpenAI',
     protocol: 'azure',
     baseUrl: '',
@@ -569,6 +584,7 @@ const BYOK_PROVIDER_PRESET_SPECS = [
   { id: 'stepfun', title: 'StepFun', providerLabel: 'StepFun' },
   { id: 'deepseek', title: 'DeepSeek', providerLabel: 'DeepSeek — OpenAI' },
   { id: 'openrouter', title: 'OpenRouter', providerLabel: 'OpenRouter' },
+  { id: 'groq', title: 'Groq', providerLabel: 'Groq' },
   { id: 'mistral', title: 'Mistral AI', providerLabel: 'Mistral AI' },
   { id: 'xai', title: 'xAI', providerLabel: 'xAI' },
   { id: 'together', title: 'Together AI', providerLabel: 'Together AI' },

@@ -725,6 +725,8 @@ export const fa: Dict = {
   'settings.fetchModelsFailed': 'دریافت مدل‌ها ممکن نشد: {detail}',
   'settings.suggestedModelsHint': 'این‌ها مدل‌های پیشنهادی برای این پروتکل هستند. ارائه‌دهنده شما ممکن است مدل‌های دیگری را پشتیبانی کند.',
   'settings.byokAutoDetected': 'Detected {provider} — base URL and free model ({model}) filled in automatically.',
+  'settings.byokAddKey': 'Add key',
+  'settings.byokKeyNotRecognized': 'Key not recognized — this key does not match a known provider. Pick a provider below, or use the local model instead.',
   'settings.onboardingSkip': 'Continue without a key',
   'settings.byokDetectedSummary': 'Provider: {provider} · Model: {model}',
   'settings.byokUseLocal': 'Use local model instead (no key needed)',

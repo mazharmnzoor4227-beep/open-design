@@ -725,6 +725,8 @@ export const ja: Dict = {
   'settings.fetchModelsFailed': 'モデルを取得できませんでした: {detail}',
   'settings.suggestedModelsHint': 'これはこのプロトコル向けの推奨モデルです。プロバイダーによっては別のモデルをサポートしている場合があります。',
   'settings.byokAutoDetected': 'Detected {provider} — base URL and free model ({model}) filled in automatically.',
+  'settings.byokAddKey': 'Add key',
+  'settings.byokKeyNotRecognized': 'Key not recognized — this key does not match a known provider. Pick a provider below, or use the local model instead.',
   'settings.onboardingSkip': 'Continue without a key',
   'settings.byokDetectedSummary': 'Provider: {provider} · Model: {model}',
   'settings.byokUseLocal': 'Use local model instead (no key needed)',

@@ -725,6 +725,8 @@ export const ko: Dict = {
   'settings.fetchModelsFailed': '모델을 가져올 수 없습니다: {detail}',
   'settings.suggestedModelsHint': '이 프로토콜에 대한 추천 모델입니다. 사용 중인 제공자는 다른 모델을 지원할 수 있습니다.',
   'settings.byokAutoDetected': 'Detected {provider} — base URL and free model ({model}) filled in automatically.',
+  'settings.byokAddKey': 'Add key',
+  'settings.byokKeyNotRecognized': 'Key not recognized — this key does not match a known provider. Pick a provider below, or use the local model instead.',
   'settings.onboardingSkip': 'Continue without a key',
   'settings.byokDetectedSummary': 'Provider: {provider} · Model: {model}',
   'settings.byokUseLocal': 'Use local model instead (no key needed)',

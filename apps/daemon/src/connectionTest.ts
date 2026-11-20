@@ -1215,6 +1215,64 @@ async function validateLocalOpenAiModel(
   };
 }
 
+// Fork: the local llama-server (llama.cpp) behind `host.docker.internal`
+// — the container's route to the host — answers GET /v1/models in a few
+// ms, but a smoke completion queues behind the single slot's long
+// generation and dies on the 12s test timeout (the user's "Test timed out
+// after 12004 ms", 2026-11-20). A listed model IS the connectivity proof
+// for the local server, so return success from the models list and never
+// spend a generation on a test. Scoped to `host.docker.internal` ONLY:
+// loopback hosts keep the upstream completion path, so the existing local
+// reasoning-completion tests still exercise it. Returns null when the host
+// is not the fork's local route, the list is unreachable, or the model is
+// absent — the caller then falls through to the smoke completion as before.
+async function validateForkLocalModelListed(
+  input: ProviderTestRequest,
+  parsed: ParsedBaseUrl,
+  signal: AbortSignal,
+  start: number,
+  requestInit: Pick<RequestInit, 'dispatcher'> = {},
+): Promise<ConnectionTestResponse | null> {
+  if (input.protocol !== 'openai') return null;
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== 'host.docker.internal') return null;
+  const url = appendVersionedApiPath(String(input.baseUrl), '/models');
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...requestInit,
+      method: 'GET',
+      headers: { authorization: `Bearer ${String(input.apiKey)}` },
+      signal,
+      redirect: 'error' as const,
+    });
+  } catch {
+    return null;
+  }
+  if (!response.ok) return null;
+  let data: unknown;
+  try {
+    const rawText = await response.text();
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    return null;
+  }
+  const modelIds = extractOpenAiModelIds(data);
+  if (!modelIds.includes(String(input.model ?? ''))) return null;
+  const latencyMs = Date.now() - start;
+  console.log(
+    `[test:provider] ${input.protocol} ${hostname} model=${input.model} → local model listed in ${latencyMs}ms (no generation spent)`,
+  );
+  return {
+    ok: true,
+    kind: 'success',
+    latencyMs,
+    model: String(input.model ?? ''),
+    status: response.status,
+    sample: 'Local model listed by the server.',
+  };
+}
+
 function isSenseAudioNonChatModel(model: string): boolean {
   return (
     model.startsWith('senseaudio-image-') ||
@@ -1675,6 +1733,17 @@ export async function testProviderConnection(
       proxyDispatcher.requestInit,
     );
     if (modelError) return modelError;
+
+    // Fork: a listed local model IS the connectivity proof — return
+    // success from the models list instead of spending a generation.
+    const localModelListed = await validateForkLocalModelListed(
+      normalizedInput,
+      validated.parsed,
+      controller.signal,
+      start,
+      proxyDispatcher.requestInit,
+    );
+    if (localModelListed) return localModelListed;
 
     const senseAudioNonChatResult = await validateSenseAudioNonChatModel(
       normalizedInput,

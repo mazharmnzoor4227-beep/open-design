@@ -725,6 +725,8 @@ export const pl: Dict = {
   'settings.fetchModelsFailed': 'Nie udało się pobrać modeli: {detail}',
   'settings.suggestedModelsHint': 'To sugerowane modele dla tego protokołu. Twój dostawca może obsługiwać inne modele.',
   'settings.byokAutoDetected': 'Detected {provider} — base URL and free model ({model}) filled in automatically.',
+  'settings.byokAddKey': 'Add key',
+  'settings.byokKeyNotRecognized': 'Key not recognized — this key does not match a known provider. Pick a provider below, or use the local model instead.',
   'settings.onboardingSkip': 'Continue without a key',
   'settings.byokDetectedSummary': 'Provider: {provider} · Model: {model}',
   'settings.byokUseLocal': 'Use local model instead (no key needed)',

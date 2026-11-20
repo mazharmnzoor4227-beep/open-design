@@ -55,6 +55,18 @@ describe('detectProviderFromApiKey', () => {
     });
   });
 
+  it('detects a Groq key (gsk_) and routes it through the OpenAI protocol', () => {
+    // Groq keys previously returned null — silent detected:false, so a
+    // pasted Groq key switched nothing and showed nothing (2026-11-20).
+    expect(detectProviderFromApiKey('gsk_abc123def456')).toEqual({
+      protocol: 'openai',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      providerLabel: 'Groq',
+      freeModel: 'llama-3.3-70b-versatile',
+      matchKind: 'gsk_',
+    });
+  });
+
   it('falls back to plain OpenAI for other sk- keys', () => {
     expect(detectProviderFromApiKey('sk-proj-abc123')?.protocol).toBe('openai');
     expect(detectProviderFromApiKey('sk-proj-abc123')?.baseUrl).toBe(

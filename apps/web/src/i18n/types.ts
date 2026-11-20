@@ -490,6 +490,8 @@ export interface Dict {
   'settings.testRunning': string;
   'settings.byokReadyToTest': string;
   'settings.byokAutoDetected': string;
+  'settings.byokAddKey': string;
+  'settings.byokKeyNotRecognized': string;
   'settings.onboardingSkip': string;
   'settings.byokDetectedSummary': string;
   'settings.byokUseLocal': string;

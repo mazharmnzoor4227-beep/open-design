@@ -98,6 +98,19 @@ export function detectProviderFromApiKey(
       matchKind: 'xai-',
     };
   }
+  if (key.startsWith('gsk_')) {
+    return {
+      protocol: 'openai',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      providerLabel: 'Groq',
+      // Groq's free tier covers all its models under rate limits;
+      // llama-3.3-70b-versatile is the flagship free chat model. The user
+      // has several Groq keys (Hermes runs 7 Groq connections) — a pasted
+      // gsk_ key must detect instead of silently doing nothing.
+      freeModel: 'llama-3.3-70b-versatile',
+      matchKind: 'gsk_',
+    };
+  }
   if (isGoogleGeminiApiKeyShape(key)) {
     return {
       protocol: 'google',

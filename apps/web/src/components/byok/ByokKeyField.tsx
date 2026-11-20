@@ -26,6 +26,9 @@ interface ByokKeyFieldProps {
   onBlur: () => void;
   onChange: (value: string) => void;
   onFocus: () => void;
+  // Fork: fired with the pasted text so the parent can run key detection
+  // the moment a key is pasted (mobile users paste, they rarely blur first).
+  onPaste?: (pastedText: string) => void;
   onToggleShowApiKey: () => void;
 }
 
@@ -41,6 +44,7 @@ export function ByokKeyField({
   onBlur,
   onChange,
   onFocus,
+  onPaste,
   onToggleShowApiKey,
 }: ByokKeyFieldProps) {
   const [apiKeyCleanedNotice, setApiKeyCleanedNotice] = useState(false);
@@ -86,6 +90,9 @@ export function ByokKeyField({
             onChange={(e) => handleChange(e.target.value)}
             onBlur={handleBlur}
             onFocus={onFocus}
+            onPaste={(e) =>
+              onPaste?.(e.clipboardData?.getData('text') ?? '')
+            }
             autoFocus
           />
           <button

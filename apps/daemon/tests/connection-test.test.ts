@@ -1777,6 +1777,49 @@ describe('POST /api/test/connection provider mode', () => {
     }
   });
 
+  it('returns success from the local models list without spending a generation', async () => {
+    // Fork: a provider test against the fork's local llama-server
+    // (host.docker.internal, the container's route to the host) must not
+    // run a smoke completion — on a 2-core host the single llama slot is
+    // busy for minutes, so the completion dies on the 12s timeout and the
+    // user reads "Test timed out" for a key that is fine (2026-11-20).
+    const originalAllowedHosts = process.env.OD_ALLOWED_INTERNAL_HOSTS;
+    process.env.OD_ALLOWED_INTERNAL_HOSTS = 'host.docker.internal';
+    let completionCalls = 0;
+    const fetchMock = vi.fn((input: FetchInput, init?: FetchInit) => {
+      if (init?.method === 'GET' && String(input).endsWith('/models')) {
+        return Promise.resolve(
+          jsonResponse({ data: [{ id: 'lfm3-1.7b' }] }),
+        );
+      }
+      completionCalls += 1;
+      return Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: 'assistant', content: 'ok' } }],
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(
+        testProviderConnection({
+          protocol: 'openai',
+          baseUrl: 'http://host.docker.internal:8081/v1',
+          apiKey: 'test',
+          model: 'lfm3-1.7b',
+        }),
+      ).resolves.toMatchObject({ ok: true, kind: 'success' });
+      expect(completionCalls).toBe(0);
+    } finally {
+      if (originalAllowedHosts === undefined) {
+        delete process.env.OD_ALLOWED_INTERNAL_HOSTS;
+      } else {
+        process.env.OD_ALLOWED_INTERNAL_HOSTS = originalAllowedHosts;
+      }
+    }
+  });
+
   it('uses max_output_tokens for native OpenAI connection tests', async () => {
     const fetchMock = passThroughOrUpstream(() =>
       jsonResponse({ output_text: 'ok' }),
